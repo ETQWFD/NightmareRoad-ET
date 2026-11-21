@@ -26,8 +26,10 @@ object QuotaManager {
     /** 2026-11 新模型：主额度上限 2 亿；每周重置回 128 万；赚取/转账进备用额度，不重置。 */
     const val HARD_CAP = 200_000_000L
     const val WEEKLY_GRANT = 1_280_000L
+    /** et.255：本次图片生成事故的永久补偿，每位用户可领取一次。 */
+    const val GIFT_6000 = 6_000L
 
-    fun limit(c: Context): Long {
+    private fun baseLimit(c: Context): Long {
         val stored = sp(c).getLong("limit", 0L)
         if (stored > 0L) return stored.coerceAtMost(HARD_CAP)
         val tok = runCatching {
@@ -37,6 +39,42 @@ object QuotaManager {
         sp(c).edit().putLong("limit", initial).apply()
         return initial
     }
+
+    /** 永久加成不会被 7 天重置清零。 */
+    fun permanentBoost(c: Context): Long =
+        sp(c).getLong("permanent_boost", 0L).coerceAtLeast(0L)
+
+    fun limit(c: Context): Long =
+        (baseLimit(c) + permanentBoost(c)).coerceAtMost(HARD_CAP)
+
+    private fun giftAccountKey(c: Context): String {
+        val email = c.getSharedPreferences("email_account", Context.MODE_PRIVATE)
+            .getString("email", "").orEmpty().trim().lowercase()
+        if (email.isNotBlank()) return email
+        val login = runCatching {
+            SecureTokenStore(c).state(CloudConfig.Provider.GITHUB)?.login
+        }.getOrNull().orEmpty().trim().lowercase()
+        return login.ifBlank { "guest" }
+    }
+
+    fun giftClaimed(c: Context): Boolean =
+        sp(c).getBoolean("gift_6000_" + giftAccountKey(c), false)
+
+    /** 领取 6000 永久额度：写入 permanent_boost，重置主额度时也保留。 */
+    fun claimGift(c: Context): Boolean {
+        if (giftClaimed(c)) return false
+        val base = baseLimit(c)
+        val boost = permanentBoost(c)
+        if (base + boost + GIFT_6000 > HARD_CAP) return false
+        sp(c).edit()
+            .putLong("limit", base)
+            .putLong("permanent_boost", boost + GIFT_6000)
+            .putBoolean("gift_6000_" + giftAccountKey(c), true)
+            .apply()
+        Log.i(TAG, "claimed permanent gift $GIFT_6000, boost=${boost + GIFT_6000}")
+        return true
+    }
+
     private const val RESET_DAYS = 7L
     private const val SP = "quota_prefs"
     private const val QUOTA_REPO = "ETQWFD/NightmareRoad-ET-Quota"
@@ -58,7 +96,7 @@ object QuotaManager {
                 .putLong("limit", WEEKLY_GRANT)
                 .putLong("epoch_ms", now)
                 .apply()
-            Log.i(TAG, "quota rolled over after $RESET_DAYS days -> $WEEKLY_GRANT")
+            Log.i(TAG, "quota rolled over after $RESET_DAYS days -> ${limit(c)}")
         }
     }
 
@@ -124,9 +162,11 @@ object QuotaManager {
         if (amount <= 0L) return false
         val pool = reserve(c)
         if (pool < amount) return false
-        val nextLimit = (limit(c) + amount).coerceAtMost(HARD_CAP)
-        if (nextLimit <= limit(c)) return false
-        sp(c).edit().putLong("reserve_pool", pool - amount).putLong("limit", nextLimit).apply()
+        val base = baseLimit(c)
+        val boost = permanentBoost(c)
+        val nextBase = (base + amount).coerceAtMost(HARD_CAP)
+        if (nextBase <= base || nextBase + boost > HARD_CAP) return false
+        sp(c).edit().putLong("reserve_pool", pool - amount).putLong("limit", nextBase).apply()
         return true
     }
 
@@ -214,7 +254,7 @@ object QuotaManager {
                         connectTimeout = 4000; readTimeout = 4000
                     }.getInputStream().bufferedReader().readText()
                 }.getOrNull() ?: ""
-                val json = """{"androidId":"$aid","model":"${android.os.Build.MODEL}","ip":"$ip","login":"${auth?.login ?: ""}","repo":"${auth?.repo ?: ""}","used":$usedNow,"total":$TOTAL,"ts":$ts}"""
+                val json = """{"androidId":"$aid","model":"${android.os.Build.MODEL}","ip":"$ip","login":"${auth?.login ?: ""}","repo":"${auth?.repo ?: ""}","used":$usedNow,"total":${limit(c)},"ts":$ts}"""
                 CloudClient.uploadContent(
                     provider, tok, auth?.owner ?: auth?.login ?: "anon",
                     QUOTA_REPO, "usage/usage_${aid}_$ts.json", json.toByteArray(), "usage",

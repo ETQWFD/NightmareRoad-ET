@@ -365,6 +365,17 @@ internal fun AdvancedSettingsDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                // et.255：低步数 + Euler A + 低 CFG 在 SD1.5 上很容易出“糊成一团”
+                // 的结果。这里给出可执行的参数建议，不偷偷覆盖用户选择。
+                if (runOnCpu && !isDit && steps <= 16f) {
+                    Text(
+                        text = "当前 ${steps.roundToInt()} 步偏低，SD1.5 容易出糊图；" +
+                            "建议 20 步以上、CFG 5–7，采样器选 DPM++ 2M Karras。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 // The free 128-512 slider belongs to SD1.5 CPU. SDXL MNN also runs
                 // on CPU/GPU but renders on the fixed 1024 canvas like every other
                 // SDXL package, so it must not be offered a range it cannot use.

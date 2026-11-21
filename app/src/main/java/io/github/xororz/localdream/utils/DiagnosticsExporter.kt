@@ -118,7 +118,11 @@ object DiagnosticsExporter {
         if (dirs.isEmpty()) sb.appendLine("(no model dirs under $root)")
         for (d in dirs) {
             sb.appendLine("== ${d.name} ==")
-            sb.appendLine("  finished: ${File(d, "finished").exists()}  ready: ${File(d, "ready").exists()}")
+            // et.255: 以前这里检查的是名为 "ready" 的占位文件，永远不会存在，
+            // 报告里因此出现 finished:true ready:false 的误导性组合。现在按
+            // 引擎真实可加载的目录布局判断 ready。
+            val ready = Model.hasSd15CpuLayout(d) || Model.hasCompleteAnySdLayout(d)
+            sb.appendLine("  finished: ${File(d, "finished").exists()}  ready: $ready")
             sb.appendLine("  sd15OutputsOk: ${Model.hasConvertedSd15Outputs(d)}")
             d.listFiles()?.forEach { f ->
                 sb.appendLine("    ${f.name}  ${f.length()} bytes")

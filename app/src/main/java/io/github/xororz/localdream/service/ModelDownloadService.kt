@@ -157,17 +157,22 @@ class ModelDownloadService : Service() {
                 r.code to (r.header("Content-Length")?.toLongOrNull() ?: -1L)
             }
         }.getOrDefault(-1 to -1L)
-        if (head.first in 200..399 && head.second > 0L) return head
-        // CDNs often reject HEAD but answer a 1-byte Range request. Parse either
-        // Content-Range ("bytes 0-0/<total>") or Content-Length so the dialog
-        // does not stay at "0 B / 未知大小" before the stream starts.
+        if (head.first in 200..399 && head.second > 1L) return head
+        // CDNs often reject HEAD but answer a 1-byte Range request. Only
+        // Content-Range ("bytes 0-0/<total>") carries the real size; a 206's
+        // Content-Length is just the 1-byte slice. et.255: trusting that 1
+        // truncated every model to one byte and still reported success.
         return runCatching {
             client.newCall(
-                Request.Builder().url(url).header("Range", "bytes=0-0").build()
+                Request.Builder().url(url)
+                    .header("Range", "bytes=0-0")
+                    .header("Accept-Encoding", "identity")
+                    .build()
             ).execute().use { r ->
                 val total = r.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull()
-                    ?: r.header("Content-Length")?.toLongOrNull() ?: -1L
-                r.code to total
+                    ?: -1L
+                val code = r.code
+                if (total > 1L) code to total else code to -1L
             }
         }.getOrDefault(head)
     }
@@ -649,6 +654,14 @@ class ModelDownloadService : Service() {
                 lastError = Exception(getString(R.string.error_download_failed, "HTTP $headCode"))
                 Log.w(TAG, "HEAD $candidate -> $headCode, next source")
                 continue
+            }
+
+            // et.255: a 1-byte or absurdly small "length" is a broken probe, not
+            // a real model. Stream it without a range so the server sends the
+            // whole file instead of accepting a truncated 1-byte download.
+            if (total in 1L..1023L) {
+                Log.w(TAG, "$candidate returned implausible length=$total, ignore it")
+                total = 0L
             }
 
             // (b) a stale/over-long scratch restarts from 0 instead of appending.

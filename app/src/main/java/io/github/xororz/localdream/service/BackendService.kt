@@ -595,11 +595,13 @@ class BackendService : Service() {
         if (mtkLike && (backendType == "sd15cpu" || backendType == "sdxlmnn")) {
             val highEndMtk = io.github.xororz.localdream.utils.DeviceCapabilities
                 .isHighEndMediaTek(this)
+            val gpuCapableMtk = io.github.xororz.localdream.utils.DeviceCapabilities
+                .mediatekGpuCapable()
             val totalGb = io.github.xororz.localdream.utils.DeviceCapabilities
                 .totalRamBytes(this) / (1024.0 * 1024.0 * 1024.0)
-            // 高端天玑有可用 GPU，可放到 512；低端仍压到 256–384 保命。
+            // 高端天玑/中端 Mali GPU 可放到 512；低端仍压到 256–384 保命。
             val cap = when {
-                highEndMtk -> 512
+                highEndMtk || gpuCapableMtk -> 512
                 totalGb <= 4.0 -> 256
                 else -> 384
             }
@@ -953,8 +955,12 @@ class BackendService : Service() {
                 // 低端天玑/Helio（PowerVR、老 Mali）继续强制 CPU，避免段错误。
                 val highEndMtk = io.github.xororz.localdream.utils.DeviceCapabilities
                     .isHighEndMediaTek(this)
-                if (highEndMtk) {
-                    Log.i(TAG, "高端天玑：允许 OpenCL GPU 后端（失败会自动回退 CPU）")
+                // et.255：中端天玑的 Mali-G615/G57/G68 等也能跑 MNN OpenCL。
+                // 之前只认 >=D9000，用户在大众机型上选 GPU 仍被强制 CPU。
+                val gpuCapableMtk = io.github.xororz.localdream.utils.DeviceCapabilities
+                    .mediatekGpuCapable()
+                if (highEndMtk || gpuCapableMtk) {
+                    Log.i(TAG, "天玑 GPU 可用（Mali）：允许 OpenCL GPU 后端（失败会自动回退 CPU）")
                 } else {
                     env["MNN_FORCE_CPU"] = "1"
                     env["MNN_GPU_POLICY"] = "0"

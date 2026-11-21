@@ -293,6 +293,13 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
 
     var showSettingsDialog by remember { mutableStateOf(false) }
+    // et.255：一次性致歉补偿弹窗。每位用户（按邮箱/GitHub 账号区分）只能领取一次。
+    var showGiftDialog by remember {
+        mutableStateOf(
+            !io.github.xororz.localdream.service.QuotaManager.isOfficial(context) &&
+                !io.github.xororz.localdream.service.QuotaManager.giftClaimed(context),
+        )
+    }
     // Privacy switches: hide the community entries from the home screen.
     val privacyPrefs = remember { context.getSharedPreferences("community_privacy", Context.MODE_PRIVATE) }
     var hideGallery by remember { mutableStateOf(privacyPrefs.getBoolean("hide_gallery", false)) }
@@ -924,6 +931,39 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
 
     if (showCloudBackupDialog) {
         CloudBackupDialog(onDismiss = { showCloudBackupDialog = false })
+    }
+
+    if (showGiftDialog) {
+        AlertDialog(
+            onDismissRequest = { showGiftDialog = false },
+            title = { Text("致歉与补偿公告") },
+            text = {
+                Text(
+                    "原因：近期多位用户反馈图片生成异常（画面模糊、模型下载失败）。\n\n" +
+                        "调查：经核查，该问题确实存在，给大家带来了很不好的体验，我们深表歉意。\n\n" +
+                        "补偿：为感谢大家的支持，向每位用户赠送 6000 额度永久提升——" +
+                        "每 7 天额度由 128 万提升至 128.6 万，永久保留，不随每周重置清零。\n\n" +
+                        "领取：点击“确认领取”后立即到账，每个账号仅可领取一次。",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val ok = io.github.xororz.localdream.service.QuotaManager.claimGift(context)
+                        android.widget.Toast.makeText(
+                            context,
+                            if (ok) "已领取 6000 永久额度，当前每 7 天额度 128.6 万"
+                            else "本次领取未生效，请稍后重试",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        showGiftDialog = false
+                    },
+                ) { Text("确认领取 6000 额度") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGiftDialog = false }) { Text("稍后领取") }
+            },
+        )
     }
 
     if (showApiServerDialog) {

@@ -184,6 +184,22 @@ object DeviceCapabilities {
     }
 
     /**
+     * et.255：中端天玑（如 G615/G57/G68/G76/G77）的 Mali 驱动带可用
+     * OpenCL，之前被 isHighEndMediaTek 一刀切强制成 CPU，用户选了 GPU 仍
+     * 以 ~20 秒/步纯 CPU 出图。这里按 GL_RENDERER 的 Mali 型号放行 >=G57
+     * 的 Valhall/第四代 GPU；G52/G31 等低端仍强制 CPU，保留防崩护栏。
+     */
+    fun mediatekGpuCapable(): Boolean {
+        if (socInfo.vendor != SocVendor.MEDIATEK) return false
+        if (!is64Bit()) return false
+        val r = glRenderer()?.lowercase().orEmpty()
+        if (r.contains("powervr")) return false
+        val digits = Regex("mali-g(\\d{2,4})").find(r)?.groupValues?.get(1)?.toIntOrNull()
+            ?: return false
+        return digits >= 57
+    }
+
+    /**
      * et.244：本机是否可用 Vulkan（MNN 官方开源后端，不需要任何厂商 NDA）。
      * 返回主版本号（1 表示 1.x），0 表示不可用。天玑 9000+ / 骁龙 8+ 的 Mali、
      * Adreno 都暴露 Vulkan 1.1+，个别 ROM 阉割了 OpenCL 但保留 Vulkan。

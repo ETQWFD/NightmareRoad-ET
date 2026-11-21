@@ -145,7 +145,8 @@ fun CloudBackupDialog(onDismiss: () -> Unit) {
                     run {
                         val qUsed = io.github.xororz.localdream.service.QuotaManager
                             .used(LocalContext.current)
-                        val qTotal = io.github.xororz.localdream.service.QuotaManager.TOTAL
+                        val qTotal = io.github.xororz.localdream.service.QuotaManager
+                            .limit(LocalContext.current)
                         val frac = (qUsed.toFloat() / qTotal.toFloat()).coerceIn(0f, 1f)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(

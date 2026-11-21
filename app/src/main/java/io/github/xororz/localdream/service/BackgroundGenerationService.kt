@@ -242,6 +242,13 @@ class BackgroundGenerationService : Service() {
         val steps = data.getIntExtra("steps", 20)
         val cfg = data.getFloatExtra("cfg", 7f)
         val seed = if (data.hasExtra("seed")) data.getLongExtra("seed", 0) else null
+        // et.255: 硬性内容安全闸门。露骨性内容（尤其涉及未成年人）不得进入
+        // 扩散引擎；在扣额度之前拦截，避免用户被扣了额度却只拿到错误。
+        io.github.xororz.localdream.util.PromptSafety.blockReason(prompt)?.let { reason ->
+            updateState(GenerationState.Error(reason))
+            stopSelf()
+            return START_NOT_STICKY
+        }
         var width = data.getIntExtra("width", 512)
         var height = data.getIntExtra("height", 512)
         // Effective dimensions = target crop size for SDXL aspect-pad mode,
