@@ -2,7 +2,7 @@
  * Nightmare Road-ET Server - 本地 AI 出图 HTTP API 外壳
  * ---------------------------------------------------------------------------
  * 版权所有 (c) 2026  Nightmare Road-ET Server  (ET)
- * 版本: 1.1.2
+ * 版本: 1.8.0
  *
  * 本程序是一层“外壳 / 鉴权反向代理 / 看门狗”，真实的出图推理由子进程
  * stable-diffusion.cpp 的 sd-server 提供（MIT 许可，上游仓库
@@ -81,6 +81,7 @@
   #include <arpa/inet.h>
   #include <pthread.h>
   #include <sys/wait.h>
+  #include <dirent.h>
   #include <signal.h>
   #include <errno.h>
   #define close_socket close
@@ -90,7 +91,9 @@
 
 /* ============================ 全局配置 ============================ */
 #define APP_NAME      "Nightmare Road-ET Server"
-#define APP_VERSION   "1.6.18"
+#define APP_VERSION   "1.8.0"
+#define MODEL_LOAD_TIMEOUT_SEC 900
+#define GENERATION_TIMEOUT_SEC 900
 #define COPYRIGHT_STR "Copyright (C) 2026 etc"
 
 #define DEFAULT_PORT 4080      /* 对外监听端口 */
@@ -100,6 +103,7 @@
 #ifdef _WIN32
 static void wu8(const wchar_t* w, char* s, int sn);   /* 前置声明：网卡名 UTF-16->UTF-8 */
 #endif
+static int find_engine(char* out, int cap);   /* v1.6.21 前置声明：spawn 与启动检查共用同一套路径 */
 #define MAX_LINE           8192
 #define MAX_BODY_BYTES     (32*1024*1024)  /* v1.6.6：请求体上限 32MB，超出返回 413 */
 
@@ -230,6 +234,20 @@ static void detect_progdir(void) {
  * 此时把 models/config/logs 放到用户目录，避免 Permission denied。
  * Linux：优先程序目录，其次 $HOME/.local/share/NightmareRoad-ET-Server。 */
 static void setup_datadir(void) {
+    /* v1.8.0: 管理端(Python UI)可用环境变量固定数据目录，避免同一台机器
+       因启动方式不同在 程序目录 / LOCALAPPDATA / ~/.local/share 之间漂移。 */
+    const char* forced = getenv("NIGHTMARE_ROAD_DATA_DIR");
+    if (forced && forced[0]) {
+        snprintf(g_datadir, sizeof(g_datadir), "%s", forced);
+        mkdir_p(g_datadir, "config");
+        mkdir_p(g_datadir, "models");
+        mkdir_p(g_datadir, "logs");
+        snprintf(g_config_path, sizeof(g_config_path), "%s%sconfig%setserver.conf", g_datadir, DIRSEP, DIRSEP);
+        snprintf(g_model_dir, sizeof(g_model_dir), "%s%smodels", g_datadir, DIRSEP);
+        char lp[1280]; snprintf(lp,sizeof(lp),"%s%slogs%sserver.log",g_datadir,DIRSEP,DIRSEP);
+        g_logf = fopen(lp, "a");
+        return;
+    }
     /* 首选：程序目录自身可写（绿色版 / 用户目录安装）。用本地候选路径先判断。 */
     char prog_models[1100];
     snprintf(prog_models,sizeof(prog_models),"%s%smodels",g_progdir,DIRSEP);
@@ -485,6 +503,7 @@ static void save_config(void) {
     fprintf(f, "unload_after_gen=%d\n", g_cfg.unload_after_gen);
     fprintf(f, "enable_api_key=%d\n", g_cfg.enable_api_key);
     fprintf(f, "rent_until=%lld\n", g_cfg.rent_until);
+    fprintf(f, "engine_args=%s\n", g_cfg.engine_args);
     fprintf(f, "config_version=2\n");
     fclose(f);
 }
@@ -841,13 +860,11 @@ static ModelEntry MODELS[] = {
  * 可达返回 1 且 *total_out 填总字节；不可达/不支持 Range 返回 0。 */
 static int http_probe_size(const char* url, long long* total_out) {
     char hdrfile[1400];
-    snprintf(hdrfile,sizeof(hdrfile),"%s%s.probe.XXXXXX", g_datadir, DIRSEP);
-    /* mkstemp-style 唯一名：直接用进程内计数 */
     static int probe_n=0;
     snprintf(hdrfile,sizeof(hdrfile),"%s%s.probe%d.tmp", g_datadir, DIRSEP, ++probe_n);
     char cmd[3200];
     snprintf(cmd,sizeof(cmd),
-        "curl -sL -m 30 --connect-timeout 15 --max-redirs 10 -A \"NightmareRoadET/1.5\" -H \"Range: bytes=0-0\" -o /dev/null -D \"%s\" \"%s\"",
+        "curl -sL -m 30 --connect-timeout 15 --max-redirs 10 -A \"NightmareRoadET/1.7\" -H \"Range: bytes=0-0\" -o /dev/null -D \"%s\" \"%s\"",
         hdrfile, url);
     int rc = system(cmd);
     if (rc!=0) { remove(hdrfile); return 0; }
@@ -856,33 +873,62 @@ static int http_probe_size(const char* url, long long* total_out) {
     char line[512]; long long total=0; int code=0; long long cl=0;
     while(fgets(line,sizeof(line),f)){
         size_t L=strlen(line); while(L && (line[L-1]=='\r'||line[L-1]=='\n')) line[--L]=0;
-        if(strncmp(line,"HTTP/",5)==0){ sscanf(line,"HTTP/1.1 %d",&code); if(code==0) sscanf(line,"HTTP/2 %d",&code); }
-        else if(strncasecmp(line,"Content-Range:",14)==0){ char* p=strchr(line,'/'); if(p) total=atoll(p+1); }
+        if(strncmp(line,"HTTP/",5)==0){
+            int c1=0,c2=0;
+            if(sscanf(line,"HTTP/%d.%d %d",&c1,&c2,&code)!=3) code=0;
+        }
+        else if(strncasecmp(line,"Content-Range:",14)==0){
+            char* p=strchr(line,'/');
+            if(p){ total=atoll(p+1); }
+        }
         else if(strncasecmp(line,"Content-Length:",15)==0){ cl=atoll(line+15); }
     }
     fclose(f); remove(hdrfile);
-    if(total<=0) total=cl;   /* 个别源不返回 Content-Range 时退而用 Content-Length */
-    if(code!=206 && code!=200) return 0;
-    if(total<=0) return 0;
+    /* v1.8.0 修复：206 响应的 Content-Length 只是本次 0-0 请求的 1 字节，
+       绝不能拿它当文件总大小。只有 200 整文件响应才允许用 Content-Length。 */
+    if(code==206){
+        if(total<=1024) return 0;          /* 没有有效 Content-Range 就放弃该源 */
+    } else if(code==200){
+        if(total<=0) total=cl;
+        if(total<=1024) return 0;
+    } else {
+        return 0;
+    }
     *total_out=total;
     return 1;
 }
 
 /* 用 curl 断点续传下载单个源到 .part，完成后校验大小并原子 rename。
+ * v1.8.0 修复：以前只要最终文件 >1MB 就当作完整，2GB 的半截文件会被当成
+ * 4.2GB 模型就绪，随后引擎加载失败。现在必须与实测/清单大小完全一致。
  * 返回 0=成功(文件已就绪)。 */
 static int download_one_source(const ModelSrc* s, const char* out) {
     mkdir_p(g_datadir, "models");
     char part[1300];
     snprintf(part, sizeof(part), "%s.part", out);
-
-    /* 已存在完整文件则跳过 */
     struct stat st;
-    if(stat(out,&st)==0 && st.st_size>1000000){
-        log_line("目标文件已存在: %s (%lld 字节)，跳过下载。", out, (long long)st.st_size);
-        return 0;
-    }
+    long long existing = 0;
+    if(stat(out,&st)==0) existing = (long long)st.st_size;
 
-    /* 下载前实测可达性与总字节 */
+    /* 已有最终文件：大小完全匹配才跳过；半截文件转成 .part 继续续传。 */
+    if(existing > 0){
+        if(s->size > 0 && existing == s->size){
+            log_line("目标文件已完整存在: %s (%lld 字节)，跳过下载。", out, existing);
+            return 0;
+        }
+        log_line("发现不完整/大小不符的旧文件: %s (%lld 字节，期望 %lld)，将修复续传。",
+                 out, existing, s->size);
+        remove(part);
+        if(rename(out, part)!=0){
+            log_line("无法把旧文件转为 .part，删除后重下。");
+            remove(out);
+            existing = 0;
+        } else {
+            existing = 0; /* 已转到 .part，下面由 curl -C - 续传 */
+        }
+    }
+    if(stat(part,&st)==0) existing = (long long)st.st_size;
+
     log_line("  探测源 [%s]: %s", s->label, s->url);
     long long measured=0;
     if(!http_probe_size(s->url, &measured)){
@@ -890,16 +936,28 @@ static int download_one_source(const ModelSrc* s, const char* out) {
         return -1;
     }
     log_line("  源可达，实测总大小 %lld 字节。", measured);
-    /* 以实测为准；与硬编码不一致时以实测为准（但至少不能是 0） */
-    long long expect = s->size>0 ? s->size : measured;
+    long long expect = measured > 1024 ? measured : s->size;
+    if(s->size > 0 && measured > 0 && measured != s->size){
+        log_line("  注意：清单大小 %lld 与源实测 %lld 不一致，以源实测为准。", s->size, measured);
+    }
+    if(existing > expect && expect > 0){
+        log_line("  .part 比目标还大(%lld > %lld)，删除后重新下载。", existing, expect);
+        remove(part);
+        existing = 0;
+    }
+    if(existing == expect && expect > 0){
+        if(rename(part,out)==0){
+            log_line("  .part 已完整(%lld 字节)，直接落盘就绪。", expect);
+            return 0;
+        }
+    }
 
-    log_line("  保存到: %s", out);
+    log_line("  保存到: %s（已下载 %lld / %lld 字节）", out, existing, expect);
     char cmd[2600];
     snprintf(cmd,sizeof(cmd),
-        "curl -L -C - --connect-timeout 30 --retry 3 --retry-delay 3 --retry-all-errors "
-        "-A \"NightmareRoadET/1.5\" --progress-bar -o \"%s\" \"%s\"",
+        "curl -fL -C - --connect-timeout 30 --retry 3 --retry-delay 3 --retry-all-errors "
+        "-A \"NightmareRoadET/1.7\" --progress-bar -o \"%s\" \"%s\"",
         part, s->url);
-    log_line("  执行: %s", cmd);
     int rc = system(cmd);
     if (rc != 0) {
         log_line("  下载中断(curl 返回 %d)，.part 已保留，重跑可断点续传。", rc);
@@ -909,13 +967,11 @@ static int download_one_source(const ModelSrc* s, const char* out) {
         log_line("  下载文件异常(太小/不存在)，视为失败，.part 保留待续传。");
         return -1;
     }
-    /* 完整性：实际字节必须等于实测期望 */
-    if (expect > 0 && st.st_size != expect) {
-        log_line("  完整性校验失败：实际 %lld 字节 != 期望 %lld 字节，不标记就绪。",
+    if (expect > 0 && (long long)st.st_size != expect) {
+        log_line("  完整性校验失败：实际 %lld 字节 != 期望 %lld 字节，不标记就绪，.part 保留。",
                  (long long)st.st_size, expect);
         return -1;
     }
-    /* 原子 rename：.part -> 最终文件（同目录 rename 原子） */
     if(rename(part, out)!=0){
         log_line("  重命名 .part->最终文件失败，请手动处理 %s。", part);
         return -1;
@@ -1040,10 +1096,189 @@ static void run_wizard(void) {
     save_config();
 }
 
+/* ==================== v1.8.0 模型路径自愈 ====================
+ * 五个痛点里“模型目录乱放 / 不知道下到哪 / 模型调用失败”的共同根因：
+ * model_path 可能是相对路径、反斜杠路径、旧安装目录，或被指到 models/ 之外。
+ * 统一规则：只认 models/ 目录为模型仓库；配置里的相对值按 models/ 解析；
+ * 配置失效时自动挑选 models/ 里体积最大的有效模型并写回配置。 */
+static int has_model_ext(const char* name) {
+    const char* dot = strrchr(name, '.');
+    if(!dot) return 0;
+    char e[16]; snprintf(e,sizeof(e),"%s",dot);
+    for(char* q=e; *q; q++) *q=(char)tolower((unsigned char)*q);
+    return !strcmp(e,".safetensors") || !strcmp(e,".ckpt") || !strcmp(e,".gguf");
+}
+
+static long long file_size64(const char* path) {
+#ifdef _WIN32
+    WIN32_FILE_ATTRIBUTE_DATA fd;
+    if(!GetFileAttributesExA(path, GetFileExInfoStandard, &fd)) return -1;
+    ULARGE_INTEGER u; u.LowPart=fd.nFileSizeLow; u.HighPart=fd.nFileSizeHigh;
+    return (long long)u.QuadPart;
+#else
+    struct stat st;
+    if(stat(path,&st)!=0) return -1;
+    return (long long)st.st_size;
+#endif
+}
+
+static void model_stem(const char* path, char* out, int cap) {
+    const char* b = path;
+    for(const char* q=path; *q; q++) if(*q=='/'||*q=='\\') b=q+1;
+    snprintf(out,cap,"%s",b);
+    char* dot=strrchr(out,'.'); if(dot) *dot=0;
+}
+
+/* 校验文件本身，而不只是“大于 1MB”：
+ * - 已知模型名必须与 MODELS 表字节数完全一致（半截文件直接拒绝）
+ * - safetensors 读文件头，要求合法 JSON 且含 dtype 字段
+ * - GGUF 检查魔数；ckpt 只能查大小 */
+static long long catalog_size_for_name(const char* path) {
+    const char* base=path;
+    for(const char* q=path; *q; q++) if(*q=='/'||*q=='\\') base=q+1;
+    for(int i=0;MODELS[i].id;i++){
+        for(int j=0;j<3;j++){
+            const char* u=MODELS[i].src[j].url;
+            if(!u[0]) continue;
+            const char* slash=strrchr(u,'/');
+            const char* fn=slash?slash+1:u;
+            if(!strcmp(fn,base) && MODELS[i].src[j].size>0) return MODELS[i].src[j].size;
+        }
+    }
+    return 0;
+}
+
+static int model_header_ok(const char* path) {
+    const char* dot=strrchr(path,'.');
+    if(!dot) return 0;
+    char ext[16]; snprintf(ext,sizeof(ext),"%s",dot);
+    for(char* q=ext;*q;q++)*q=(char)tolower((unsigned char)*q);
+    if(!strcmp(ext,".gguf")){
+        FILE* f=fopen(path,"rb"); if(!f) return 0;
+        unsigned char m[4]={0}; int ok=(fread(m,1,4,f)==4 && !memcmp(m,"GGUF",4));
+        fclose(f); return ok;
+    }
+    if(strcmp(ext,".safetensors")) return 1; /* ckpt 无统一头，交给引擎报错 */
+    FILE* f=fopen(path,"rb"); if(!f) return 0;
+    unsigned char h[8]; int ok=0;
+    if(fread(h,1,8,f)==8){
+        unsigned long long n=0;
+        for(int i=7;i>=0;i--) n=(n<<8)|h[i];
+        if(n>=2 && n<=16ULL*1024*1024){
+            char* blob=(char*)malloc((size_t)n+1);
+            if(blob && fread(blob,1,(size_t)n,f)==(size_t)n){
+                blob[n]=0;
+                size_t L=strlen(blob);
+                while(L>0 && (blob[L-1]==' '||blob[L-1]=='\r'||blob[L-1]=='\n'||blob[L-1]=='\t')) L--;
+                ok=(L>2 && blob[0]=='{' && blob[L-1]=='}' && strstr(blob,"\"dtype\"") && strstr(blob,"\"shape\""));
+            }
+            free(blob);
+        }
+    }
+    fclose(f); return ok;
+}
+
+static int model_file_usable(const char* path, long long* size_out) {
+    long long sz=file_size64(path);
+    if(sz<=10LL*1024*1024) return 0;
+    long long known=catalog_size_for_name(path);
+    if(known>0 && sz!=known) return 0;
+    if(!has_model_ext(path)) return 0;
+    if(!model_header_ok(path)) return 0;
+    if(size_out) *size_out=sz;
+    return 1;
+}
+
+/* 在 models/ 里挑最大的有效模型（>10MB，扩展名合法）。 */
+static int scan_best_model(char* out, int cap, char* idout, int idcap) {
+    long long best=-1; char bestname[1024]={0};
+#ifdef _WIN32
+    char pat[1400]; snprintf(pat,sizeof(pat),"%s\\*.*",g_model_dir);
+    WIN32_FIND_DATAA fd; HANDLE h=FindFirstFileA(pat,&fd);
+    if(h==INVALID_HANDLE_VALUE) return 0;
+    do {
+        if(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if(!has_model_ext(fd.cFileName)) continue;
+        ULARGE_INTEGER u; u.LowPart=fd.nFileSizeLow; u.HighPart=fd.nFileSizeHigh;
+        long long sz=(long long)u.QuadPart;
+        char full[1400]; snprintf(full,sizeof(full),"%s\\%s",g_model_dir,fd.cFileName);
+        if(sz>best && model_file_usable(full,NULL)){ best=sz; snprintf(bestname,sizeof(bestname),"%s",fd.cFileName); }
+    } while(FindNextFileA(h,&fd));
+    FindClose(h);
+#else
+    DIR* d=opendir(g_model_dir); if(!d) return 0;
+    struct dirent* de;
+    while((de=readdir(d))){
+        if(de->d_name[0]=='.') continue;
+        if(!has_model_ext(de->d_name)) continue;
+        char full[1400]; snprintf(full,sizeof(full),"%s%s%s",g_model_dir,DIRSEP,de->d_name);
+        long long sz=file_size64(full);
+        if(sz>best && model_file_usable(full,NULL)){ best=sz; snprintf(bestname,sizeof(bestname),"%s",de->d_name); }
+    }
+    closedir(d);
+#endif
+    if(best<0) return 0;
+    snprintf(out,cap,"%s%s%s",g_model_dir,DIRSEP,bestname);
+    model_stem(bestname,idout,idcap);
+    return 1;
+}
+
+/* 返回 1=拿到可用模型；0=没有可用模型。必要时自动修正并保存配置。 */
+static int resolve_model_path(void) {
+    char orig[1024]; snprintf(orig,sizeof(orig),"%s",g_cfg.model_path);
+    char* p=orig; while(*p==' '||*p=='\t') p++;
+    char* e=p+strlen(p); while(e>p && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\r'||e[-1]=='\n')) *--e=0;
+    int changed=0;
+
+    if(p[0]) {
+        long long sz=0;
+        if(model_file_usable(p,&sz)){
+            snprintf(g_cfg.model_path,sizeof(g_cfg.model_path),"%s",p);
+            if(strcmp(g_cfg.model_path,orig)!=0 || !g_cfg.model_id[0]){
+                model_stem(p,g_cfg.model_id,sizeof(g_cfg.model_id)); changed=1;
+            }
+            if(changed) save_config();
+            return 1;
+        }
+        /* 相对路径 / 只写文件名：按 models/ 解析 */
+        int is_abs = (p[0]=='/' || p[0]=='\\');
+#ifdef _WIN32
+        if(((p[0]>='A'&&p[0]<='Z')||(p[0]>='a'&&p[0]<='z')) && p[1]==':') is_abs=1;
+#endif
+        if(!is_abs){
+            char cand[1400];
+            snprintf(cand,sizeof(cand),"%s%s%s",g_model_dir,DIRSEP,p);
+            if(model_file_usable(cand,NULL)){
+                snprintf(g_cfg.model_path,sizeof(g_cfg.model_path),"%s",cand);
+                model_stem(cand,g_cfg.model_id,sizeof(g_cfg.model_id));
+                log_line("模型路径已修正到模型仓库: %s", g_cfg.model_path);
+                save_config(); return 1;
+            }
+        }
+        log_line("配置里的模型不可用: %s（不存在、小于10MB或扩展名不支持）", p);
+    }
+
+    char best[1400], id[256];
+    if(scan_best_model(best,sizeof(best),id,sizeof(id))){
+        snprintf(g_cfg.model_path,sizeof(g_cfg.model_path),"%s",best);
+        snprintf(g_cfg.model_id,sizeof(g_cfg.model_id),"%s",id);
+        log_line("已自动选择模型仓库中的模型: %s", g_cfg.model_path);
+        save_config(); return 1;
+    }
+    g_cfg.model_path[0]=0; g_cfg.model_id[0]=0;
+    log_line("模型仓库为空: %s（请用管理端下载模型，或把 .safetensors 放进该目录）", g_model_dir);
+    return 0;
+}
+
 /* ============================ 引擎子进程 ============================ */
 /* 拼出 sd-server 启动命令并以子进程方式拉起。绑定 127.0.0.1:inner_port。 */
 static int spawn_engine(void) {
     char engine[1280], args[3000];
+    /* v1.8.0：每次拉起前先自愈模型路径，绝不再用空路径/失效路径启动引擎。 */
+    if(!resolve_model_path()){
+        log_line("引擎启动取消：没有可用模型。模型目录: %s", g_model_dir);
+        return -1;
+    }
     /* 引擎解析：优先与外壳同目录；Linux tar 布局在 bin/，Windows 为扁平同目录。
        若都找不到，置缺失标志（看门狗据此停止刷屏重启）并给出可操作提示。 */
     {
@@ -1053,13 +1288,9 @@ static int spawn_engine(void) {
 #else
         ename="sd-server";
 #endif
-        char cand[3][1280]; int nc=0;
-        snprintf(cand[nc++],1280,"%s%s%s",g_progdir,DIRSEP,ename);
-        snprintf(cand[nc++],1280,"%s%sbin%s%s",g_progdir,DIRSEP,DIRSEP,ename);
-        snprintf(cand[nc++],1280,"%s%s..%s%s",g_datadir,DIRSEP,DIRSEP,ename);
-        int found=-1;
-        for(int i=0;i<nc;i++){ if(access(cand[i],ACCESS_EXISTS)==0){ found=i; break; } }
-        if(found<0){
+        /* v1.6.21 关键修复：此前 spawn 只找 程序目录/bin/上级，漏了 engine\ 子目录，
+           导致 find_engine 认为存在、spawn 却报“找不到推理引擎”。统一走 find_engine。 */
+        if(!find_engine(engine,sizeof(engine))){
             if(!g_engine_missing){
                 g_engine_missing=1;
                 log_line("==================== 严重：找不到推理引擎 ====================");
@@ -1076,7 +1307,6 @@ static int spawn_engine(void) {
             return -1;
         }
         g_engine_missing=0;
-        snprintf(engine,sizeof(engine),"%s",cand[found]);
     }
     snprintf(args,sizeof(args),
         "--model \"%s\" --listen-ip 127.0.0.1 --listen-port %d --threads %d%s%s",
@@ -1090,7 +1320,13 @@ static int spawn_engine(void) {
     STARTUPINFOA si; ZeroMemory(&si,sizeof(si)); si.cb=sizeof(si);
     ZeroMemory(&g_child,sizeof(g_child));
     if (!CreateProcessA(engine, cmdline, NULL,NULL,FALSE,0,NULL,g_progdir,&si,&g_child)) {
-        log_line("CreateProcess 失败: %lu", GetLastError()); return -1;
+        DWORD err=GetLastError();
+        log_line("CreateProcess 失败: %lu", err);
+        if(err==ERROR_MOD_NOT_FOUND){
+            log_line("系统报告缺少依赖 DLL：请把发行包 engine\\ 目录里的 libomp.dll 等文件与 sd-server.exe 放在一起，");
+            log_line("并检查杀毒软件是否隔离了其中某个 DLL（Windows 安全中心→保护历史记录→还原）。");
+        }
+        return -1;
     }
     g_child_started=1;
     if (!g_job) {
@@ -1109,16 +1345,21 @@ static int spawn_engine(void) {
     pid_t pid = fork();
     if (pid<0) { log_line("fork 失败"); return -1; }
     if (pid==0) {
-        /* 子进程：执行 sd-server */
-        char* av[16]; int ac=0;
+        /* 子进程：执行 sd-server；v1.8.0 补上 engine_args（旧版 Linux 完全忽略它）。 */
+        char* av[64]; int ac=0;
         av[ac++]=engine;
         av[ac++]="--model";       av[ac++]=g_cfg.model_path;
         av[ac++]="--listen-ip";  av[ac++]="127.0.0.1";
         char p[16]; snprintf(p,sizeof(p),"%d",g_cfg.inner_port); av[ac++]="--listen-port"; av[ac++]=p;
         char th[16]; snprintf(th,sizeof(th),"%d",g_cfg.threads); av[ac++]="--threads"; av[ac++]=th;
+        if(g_cfg.engine_args[0]){
+            char tmp[512]; snprintf(tmp,sizeof(tmp),"%s",g_cfg.engine_args);
+            char* tok=strtok(tmp," \t\r\n");
+            while(tok && ac<62){ av[ac++]=strdup(tok); tok=strtok(NULL," \t\r\n"); }
+        }
         av[ac]=NULL;
         execv(engine, av);
-        exit(127); /* exec 失败 */
+        _exit(127); /* exec 失败 */
     }
     g_child_pid = pid;
 #endif
@@ -1147,14 +1388,28 @@ static void kill_engine(void) {
 #endif
 }
 
+/* 2026-11 修复：Windows 的 SO_RCVTIMEO/SO_SNDTIMEO 接收的是毫秒 DWORD，
+   而不是 POSIX 的 struct timeval。旧代码在 Windows 上传 timeval 会被内核
+   当成 1ms/120ms/300ms，导致「刚发出请求就报 300 秒无响应」「上传图生图
+   请求体被立刻截断」。这里统一按平台设置。 */
+static void set_sock_timeout(sock_t s, int seconds){
+#ifdef _WIN32
+    DWORD ms = (DWORD)seconds * 1000u;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
+#else
+    struct timeval tv; tv.tv_sec = seconds; tv.tv_usec = 0;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&tv, sizeof(tv));
+#endif
+}
+
 /* 向上游 sd-server 做一次健康探测（GET /）。返回 1=就绪。 */
 static int upstream_healthy(void) {
     sock_t s = socket(AF_INET, SOCK_STREAM, 0);
     if (s<0) return 0;
     /* 探测 socket 加 1s 收发超时，绝不无限挂死 */
-    struct timeval pt; pt.tv_sec=1; pt.tv_usec=0;
-    setsockopt(s,SOL_SOCKET,SO_SNDTIMEO,(char*)&pt,sizeof(pt));
-    setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(char*)&pt,sizeof(pt));
+    set_sock_timeout(s, 1);
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((uint16_t)g_cfg.inner_port);
     a.sin_addr.s_addr=inet_addr("127.0.0.1");
@@ -1246,6 +1501,18 @@ static void* watchdog_thread(void* arg) {
 }
 
 /* ============================ HTTP 鉴权反向代理 ============================ */
+/* v1.8.0：API Key 比较改为固定时间，避免逐个字符 strcmp 的时序侧信道。 */
+static int key_equal(const char* a, const char* b) {
+    size_t la = strlen(a), lb = strlen(b);
+    unsigned diff = (la == lb) ? 0u : 1u;
+    size_t n = la > lb ? la : lb;
+    for (size_t i = 0; i < n; i++) {
+        unsigned ca = i < la ? (unsigned char)a[i] : 0u;
+        unsigned cb = i < lb ? (unsigned char)b[i] : 0u;
+        diff |= ca ^ cb;
+    }
+    return diff == 0;
+}
 /* 从请求头里取 API Key：Authorization: Bearer xxx / X-API-Key: xxx / ?api_key=xxx */
 static int check_auth(const char* hdr_block, const char* query) {
     /* v1.6.5：enable_api_key=0（默认）时不校验密钥，直接放行 */
@@ -1259,7 +1526,7 @@ static int check_auth(const char* hdr_block, const char* query) {
         char got[128]; int n=0;
         while(*p && *p!='\r' && *p!='\n' && n<(int)sizeof(got)-1) got[n++]=*p++;
         got[n]=0;
-        if(strcmp(got,g_cfg.api_key)==0) return 1;
+        if(key_equal(got,g_cfg.api_key)) return 1;
     }
     /* 2) X-API-Key */
     p = strcasestr(hdr_block, "x-api-key:");
@@ -1267,7 +1534,7 @@ static int check_auth(const char* hdr_block, const char* query) {
         char got[128]; int n=0;
         while(*p && *p!='\r' && *p!='\n' && n<(int)sizeof(got)-1) got[n++]=*p++;
         got[n]=0;
-        if(strcmp(got,g_cfg.api_key)==0) return 1;
+        if(key_equal(got,g_cfg.api_key)) return 1;
     }
     /* 3) ?api_key= */
     if (query) {
@@ -1275,7 +1542,7 @@ static int check_auth(const char* hdr_block, const char* query) {
         if(p){ p+=8; char got[128]; int n=0;
             while(*p && *p!='&' && n<(int)sizeof(got)-1) got[n++]=*p++;
             got[n]=0;
-            if(strcmp(got,g_cfg.api_key)==0) return 1;
+            if(key_equal(got,g_cfg.api_key)) return 1;
         }
     }
     return 0;
@@ -1315,26 +1582,13 @@ static int find_engine(char* out, int cap) {
     return 0;
 }
 
-/* 返回缺少的 DLL 名（逗号分隔，空串=齐全）。只检查真正会导致引擎起不来的两个。 */
+/* v1.6.23：不再把 stable-diffusion.dll / ggml.dll 当成“必然缺失”。
+   官方 Windows 版 sd-server 默认是静态链接（发行包内只有 libomp.dll），
+   旧逻辑每次启动都误报“引擎已找到但缺 DLL”，把正常安装吓成故障。
+   DLL 依赖是否真的缺失，交给 CreateProcess 的 ERROR_MOD_NOT_FOUND 精确判断。 */
 static void engine_missing_dlls(const char* engine_path, char* out, int cap) {
-    out[0] = 0;
-#ifndef _WIN32
-    (void)engine_path; (void)cap;
-#else
-    char dir[1300]; snprintf(dir, sizeof(dir), "%s", engine_path);
-    char* slash = strrchr(dir, DIRSEP[0]);
-    if (slash) slash[1] = 0; else dir[0] = 0;
-    const char* need[] = { "stable-diffusion.dll", "ggml.dll" };
-    for (int i = 0; i < 2; i++) {
-        char f[1500];
-        snprintf(f, sizeof(f), "%s%s", dir, need[i]);
-        if (access(f, ACCESS_EXISTS) != 0) {
-            if (out[0]) strncat(out, ", ", cap - strlen(out) - 1);
-            strncat(out, need[i], cap - strlen(out) - 1);
-        }
-    }
-    (void)engine_path;
-#endif
+    (void)engine_path; out[0]=0;
+    if(cap>0) out[0]=0;
 }
 
 /* v1.6.7: 临时出图窗口。读取 web/admin.html，注入 API Key 后返回。
@@ -1413,12 +1667,32 @@ static void serve_admin(sock_t c) {
     send_html(c, buf);
 }
 
+/* v1.8.0：首页展示字段做 HTML 转义，模型名/自定义路径里带 <>&" 不会破坏页面。 */
+static void html_escape(const char* in, char* out, int cap) {
+    if (!out || cap <= 0) return;
+    int n = 0;
+    for (const char* p = in; p && *p && n < cap - 1; p++) {
+        const char* rep = NULL;
+        if (*p == '&') rep = "&amp;";
+        else if (*p == '<') rep = "&lt;";
+        else if (*p == '>') rep = "&gt;";
+        else if (*p == '"') rep = "&quot;";
+        else if (*p == '\'') rep = "&#39;";
+        if (rep) {
+            int rl = (int)strlen(rep);
+            if (n + rl >= cap - 1) break;
+            memcpy(out + n, rep, rl); n += rl;
+        } else out[n++] = *p;
+    }
+    out[n] = 0;
+}
+
 /* 浅色圆角首页（Win11 纸片风），展示 API 地址/Key/模型，一键复制 */
 static void serve_home(sock_t c) {
-    char url[128], key[80], model[128];
+    char url[128], key[80], model[192];
     snprintf(url,sizeof(url),"http://%s:%d", g_recommended_ip, g_cfg.port);
     snprintf(key,sizeof(key),"%s", g_cfg.api_key);
-    snprintf(model,sizeof(model),"%s", g_cfg.model_id[0]?g_cfg.model_id:"(未选择)");
+    html_escape(g_cfg.model_id[0]?g_cfg.model_id:"(未选择)", model, sizeof(model));
     char html[4096];
     snprintf(html,sizeof(html),
 "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
@@ -1481,9 +1755,67 @@ static void send_json(sock_t c, int code, const char* status, const char* body) 
  * 引擎 sd-server 吃请求体里的 steps/cfg_scale/batch_size（或 OpenAI 的 n），不读命令行默认。
  * 因此对生成类入站请求：客户端没带的字段，用 GUI/config 的默认值补上，保证默认透传生效。
  * 已有字段绝不覆盖。 */
-static int json_has_key(const char* body, const char* key){
-    char pat[160]; snprintf(pat,sizeof(pat),"\"%s\"",key);
-    return strstr(body, pat)!=NULL;
+/* 只在 JSON 顶层对象里找 key，避免 prompt 文本里出现 "steps" 就被误判成
+   客户端已经传了参数。旧版用 strstr 全局搜索，既可能漏注入，也可能把
+   提示词里的单词当成字段。 */
+static const char* json_top_value(const char* body, const char* key){
+    if(!body) return NULL;
+    const char* p = strchr(body,'{'); if(!p) return NULL;
+    int depth=0, instr=0, esc=0; const char* ks=NULL;
+    for(; *p; p++){
+        char ch=*p;
+        if(instr){
+            if(esc){ esc=0; continue; }
+            if(ch=='\\'){ esc=1; continue; }
+            if(ch=='"'){
+                instr=0;
+                if(depth==1 && ks){
+                    size_t n=(size_t)(p-ks);
+                    if(strlen(key)==n && memcmp(ks,key,n)==0){
+                        const char* q=p+1;
+                        while(*q==' '||*q=='\t'||*q=='\r'||*q=='\n') q++;
+                        if(*q==':'){
+                            q++; while(*q==' '||*q=='\t'||*q=='\r'||*q=='\n') q++;
+                            return q;
+                        }
+                    }
+                }
+                ks=NULL;
+            }
+            continue;
+        }
+        if(ch=='"'){ instr=1; ks=(depth==1)? p+1 : NULL; continue; }
+        if(ch=='{'){ depth++; ks=NULL; }
+        else if(ch=='}'){ depth--; ks=NULL; }
+    }
+    return NULL;
+}
+static int json_has_top(const char* body, const char* key){ return json_top_value(body,key)!=NULL; }
+static double json_num_any(const char* body,const char* k1,const char* k2,const char* k3,const char* k4,double def){
+    const char* v=json_top_value(body,k1); if(!v&&k2) v=json_top_value(body,k2);
+    if(!v&&k3) v=json_top_value(body,k3); if(!v&&k4) v=json_top_value(body,k4);
+    if(!v) return def;
+    while(*v==' '||*v=='\t'||*v=='\r'||*v=='\n') v++;
+    if(*v=='"' ){ v++; }
+    return atof(v);
+}
+/* 支持 size:"256x256" / resolution:"256*256"（也接受全角×），以及
+   image_width/image_height 这类客户端别名。 */
+static int json_size_any(const char* body,int* w,int* h){
+    const char* v=json_top_value(body,"size");
+    if(!v) v=json_top_value(body,"resolution");
+    if(v){
+        while(*v==' '||*v=='\t') v++;
+        if(*v=='"') v++;
+        int a=0,b=0;
+        if(sscanf(v,"%d%*[xX×*]%d",&a,&b)==2 && a>0 && b>0){ *w=a; *h=b; return 1; }
+    }
+    if(json_has_top(body,"width")||json_has_top(body,"image_width")){
+        int a=(int)json_num_any(body,"width","image_width",NULL,NULL,0);
+        int b=(int)json_num_any(body,"height","image_height",NULL,NULL,0);
+        if(a>0&&b>0){ *w=a; *h=b; return 1; }
+    }
+    return 0;
 }
 /* 判断 path 是否为需要注入默认参数的生成类端点 */
 static int is_gen_path(const char* path){
@@ -1491,40 +1823,88 @@ static int is_gen_path(const char* path){
            !strcmp(path,"/sdapi/v1/img2img") ||
            !strcmp(path,"/v1/images/generations");
 }
-/* 返回 malloc 的新 body（原 body + 注入片段）；*out_len 为其长度。无需注入时原样 malloc 副本。 */
+/* 返回 malloc 的新 body（原 body + 注入片段）；*out_len 为其长度。无需注入时
+   返回原样副本且长度不变，调用方据此判断是否真的注入了。 */
 static char* build_injected_body(const char* body, int blen, const char* path, int* out_len){
     *out_len=blen;
-    char* nb = malloc((size_t)blen + 512);   /* 注入片段最长约 300 字节，留足余量防堆溢出 */
+    char* nb = malloc((size_t)blen + 512);
     if(!nb) return NULL;
     memcpy(nb, body, blen); nb[blen]=0;
-    /* 仅对 JSON 对象体注入 */
     char* ob = strchr(nb,'{');
-    if(!ob){ *out_len=blen; return nb; }
-    char frag[320]; frag[0]=0;
+    if(!ob){ return nb; }
     int is_openai = !strcmp(path,"/v1/images/generations");
-    if(!json_has_key(nb,"steps")){
-        char t[64]; snprintf(t,sizeof(t),"\"steps\":%d,", g_cfg.steps); strcat(frag,t);
+    char frag[420]; frag[0]=0;
+#define ADD_FRAG(FMT,VAL) do{ char _t[96]; snprintf(_t,sizeof(_t),FMT,VAL); \
+        if(frag[0]) strncat(frag,",",sizeof(frag)-strlen(frag)-1); \
+        strncat(frag,_t,sizeof(frag)-strlen(frag)-1); }while(0)
+    /* 只补客户端没传的字段；如果传的是别名（num_inference_steps 等），
+       用同一个值补成 sd-server 认识的标准字段，绝不改成服务端默认值。 */
+    if(!json_has_top(nb,"steps")){
+        double v=json_num_any(nb,"num_inference_steps","sample_steps","n_steps",NULL,g_cfg.steps);
+        ADD_FRAG("\"steps\":%d",(int)v);
     }
-    if(!json_has_key(nb,"cfg_scale")){
-        char t[64]; snprintf(t,sizeof(t),"\"cfg_scale\":%.2f,", g_cfg.cfg_scale); strcat(frag,t);
+    if(!json_has_top(nb,"cfg_scale")){
+        double v=json_num_any(nb,"cfg","guidance_scale","cfg_scale_value",NULL,g_cfg.cfg_scale);
+        char t[64]; snprintf(t,sizeof(t),"%.2f",v); ADD_FRAG("\"cfg_scale\":%s",t);
     }
     if(is_openai){
-        if(!json_has_key(nb,"n")){
-            char t[64]; snprintf(t,sizeof(t),"\"n\":%d,", g_cfg.batch_size); strcat(frag,t);
-        }
+        if(!json_has_top(nb,"n")) ADD_FRAG("\"n\":%d",g_cfg.batch_size);
     } else {
-        if(!json_has_key(nb,"batch_size")){
-            char t[64]; snprintf(t,sizeof(t),"\"batch_size\":%d,", g_cfg.batch_size); strcat(frag,t);
-        }
+        if(!json_has_top(nb,"batch_size")) ADD_FRAG("\"batch_size\":%d",g_cfg.batch_size);
     }
-    if(!frag[0]){ *out_len=blen; return nb; }
+    int sw=0,sh=0;
+    if(json_size_any(nb,&sw,&sh)){
+        if(!json_has_top(nb,"width")) ADD_FRAG("\"width\":%d",sw);
+        if(!json_has_top(nb,"height")) ADD_FRAG("\"height\":%d",sh);
+    }
+#undef ADD_FRAG
+    if(!frag[0]) return nb;
     size_t fl=strlen(frag);
-    /* 在 '{' 后插入 frag：把 '{' 之后的内容整体右移 fl 字节（含结尾 NUL） */
-    size_t keep = (size_t)blen - (size_t)(ob - nb) + 1; /* ob 之后(含 NUL)的字节数 */
-    memmove(ob+1+fl, ob+1, keep);
+    const char* q=ob+1; while(*q==' '||*q=='\t'||*q=='\r'||*q=='\n') q++;
+    int nonempty = (*q!='}');
+    size_t keep=(size_t)blen-(size_t)(ob-nb)+1;
+    memmove(ob+1+fl+(nonempty?1:0), ob+1, keep);
     memcpy(ob+1, frag, fl);
-    *out_len = blen + (int)fl;
+    if(nonempty) ob[1+fl]=',';
+    *out_len = blen + (int)fl + (nonempty?1:0);
     return nb;
+}
+
+/* v1.6.23 自检：不启动服务、不加载模型，只验证参数解析/补全不会覆盖用户值。 */
+static int run_selftest(void){
+    int fail=0;
+    struct { const char* name; const char* body; const char* must[4]; const char* mustnot[4]; } t[] = {
+      {"canonical-256x256-4",
+       "{\"prompt\":\"a photo, steps ahead\",\"steps\":4,\"width\":256,\"height\":256}",
+       {"\"width\":256","\"height\":256","\"steps\":4"}, {"\"width\":512","\"steps\":20"}},
+      {"aliases-size",
+       "{\"prompt\":\"x\",\"num_inference_steps\":4,\"size\":\"256x256\"}",
+       {"\"steps\":4","\"width\":256","\"height\":256"}, {"\"steps\":20","\"width\":512"}},
+      {"quoted-numbers",
+       "{\"prompt\":\"x\",\"steps\":\"4\",\"width\":\"256\",\"height\":\"256\"}",
+       {"\"width\":\"256\"","\"height\":\"256\""}, {"\"width\":512"}},
+      {"empty-object", "{}", NULL, NULL}
+    };
+    for(size_t i=0;i<sizeof(t)/sizeof(t[0]);i++){
+        int len=0; char* out=build_injected_body(t[i].body,(int)strlen(t[i].body),"/sdapi/v1/txt2img",&len);
+        if(!out){ printf("FAIL %s: oom\n",t[i].name); fail=1; continue; }
+        int ok=1;
+        if(t[i].must) for(size_t k=0;t[i].must[k];k++) if(!strstr(out,t[i].must[k])) { ok=0; printf("FAIL %s: missing %s\n",t[i].name,t[i].must[k]); }
+        if(t[i].mustnot) for(size_t k=0;t[i].mustnot[k];k++) if(strstr(out,t[i].mustnot[k])) { ok=0; printf("FAIL %s: found forbidden %s\n",t[i].name,t[i].mustnot[k]); }
+        int b=0; for(char* q=out;*q;q++){ if(*q=='{')b++; else if(*q=='}')b--; }
+        if(b!=0){ ok=0; printf("FAIL %s: unbalanced braces\n",t[i].name); }
+        if(strstr(out,",}")){ ok=0; printf("FAIL %s: trailing comma\n",t[i].name); }
+        printf("%s %s\n", ok?"PASS":"FAIL", t[i].name);
+        if(!ok) fail=1;
+        printf("  -> %s\n", out);
+        free(out);
+    }
+    /* /api 路径的别名解析（直接验证同一组 helper） */
+    int w=0,h=0;
+    if(!json_size_any("{\"size\":\"256x256\"}",&w,&h)||w!=256||h!=256){ printf("FAIL api-size\n"); fail=1; } else printf("PASS api-size\n");
+    if((int)json_num_any("{\"num_inference_steps\":4}","steps","num_inference_steps",NULL,NULL,20)!=4){ printf("FAIL api-steps\n"); fail=1; } else printf("PASS api-steps\n");
+    printf(fail?"SELFTEST FAILED\n":"SELFTEST OK\n");
+    return fail;
 }
 
 /* 把客户端已解析的请求转发给上游，并把上游响应原样流式回传给客户端。
@@ -1556,11 +1936,7 @@ static void forward_to_upstream(sock_t c, const char* method, const char* target
     }
     /* v1.6.6：给上游 socket 加收发超时。旧版 recv 无超时，引擎卡住时
        该连接线程会永久挂死并占住线程，表现为“调用一直转圈/后续请求排不上”。 */
-    {
-        struct timeval ft; ft.tv_sec=300; ft.tv_usec=0;
-        setsockopt(u,SOL_SOCKET,SO_RCVTIMEO,(char*)&ft,sizeof(ft));
-        setsockopt(u,SOL_SOCKET,SO_SNDTIMEO,(char*)&ft,sizeof(ft));
-    }
+    set_sock_timeout(u, GENERATION_TIMEOUT_SEC);
     /* 拼转发请求行 + 透传头(去掉 Host/Connection/Authorization)，强制 Connection: close */
     char req[MAX_LINE*4]; int w=0;
     w+=snprintf(req+w,sizeof(req)-w,"%s %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nConnection: close\r\n",
@@ -1587,7 +1963,7 @@ static void forward_to_upstream(sock_t c, const char* method, const char* target
     send(u,req,w,0);
     if(body_len>0) send(u,body,body_len,0);
     /* 流式回传上游响应（含状态行/头/体）直到上游关闭 */
-    char buf[16384]; int r; long got=0;
+    char buf[16384]; int r; long got=0; time_t f_t0=time(NULL);
     while((r=recv(u,buf,sizeof(buf),0))>0){ got+=r; send(c,buf,r,MSG_NOSIGNAL); }
     close_socket(u);
     /* 2026-11：上游一个字节都没回就断开，分两种情况告诉调用方真正原因，
@@ -1606,11 +1982,20 @@ static void forward_to_upstream(sock_t c, const char* method, const char* target
                 ec);
             send_json(c,502,"Bad Gateway",ej);
         } else {
-            log_line("引擎 300 秒无响应，已返回超时错误");
-            send_json(c,504,"Gateway Timeout",
-                "{\"error\":{\"kind\":\"engine_timeout\","
-                "\"message\":\"引擎 300 秒内没有返回任何数据\","
-                "\"hint\":\"降低分辨率与步数（如 384×384/8 步），或确认模型可正常推理\"}}");
+            long el = (long)(time(NULL) - f_t0);
+            if (el < 5) {
+                log_line("引擎在 %ld 秒内关闭连接且没有返回数据（请求体过大或参数不被支持）", el);
+                send_json(c,502,"Bad Gateway",
+                    "{\"error\":{\"kind\":\"engine_closed_early\","
+                    "\"message\":\"引擎提前关闭了连接，没有返回任何数据\","
+                    "\"hint\":\"多为请求体过大（图生图底图建议长边≤1024、JPEG/PNG≤8MB）或参数不被该模型支持；可先试 512×512/8 步\"}}");
+            } else {
+                log_line("引擎 %ld 秒无响应，已返回超时错误", el);
+                send_json(c,504,"Gateway Timeout",
+                    "{\"error\":{\"kind\":\"engine_timeout\","
+                    "\"message\":\"引擎长时间没有返回数据\","
+                    "\"hint\":\"降低分辨率与步数（如 384×384/8 步），或确认模型可正常推理\"}}");
+            }
         }
     }
 }
@@ -1618,21 +2003,21 @@ static void forward_to_upstream(sock_t c, const char* method, const char* target
 /* ---- v1.6.5：/api/txt2img、/api/img2img 真正出图并返回 base64 ---- */
 /* 从 JSON 里取字符串字段值（去掉首尾引号），写入 out。找不到用 def。 */
 static void jstr(const char* body, const char* key, char* out, int outlen, const char* def){
-    char pat[160]; snprintf(pat,sizeof(pat),"\"%s\"",key);
-    const char* p=strstr(body,pat); if(!p){ snprintf(out,outlen,"%s",def); return; }
-    p=strchr(p,':'); if(!p){ snprintf(out,outlen,"%s",def); return; }
-    p++; while(*p==' '||*p=='\t') p++;
-    if(*p!='"'){ /* 数字字段 */ snprintf(out,outlen,"%s",def); return; }
+    const char* p=json_top_value(body,key); if(!p){ snprintf(out,outlen,"%s",def); return; }
+    while(*p==' '||*p=='\t'||*p=='\r'||*p=='\n') p++;
+    if(*p!='"'){ snprintf(out,outlen,"%s",def); return; }
     p++; int n=0;
-    while(*p && *p!='"' && n<outlen-1) out[n++]=*p++;
+    while(*p && *p!='"' && n<outlen-1){
+        if(*p=='\\' && p[1]) p++;
+        out[n++]=*p++;
+    }
     out[n]=0;
 }
-/* 从 JSON 里取数字字段，找不到用 def。 */
+/* 从 JSON 顶层取数字字段，找不到用 def。 */
 static double jnum(const char* body, const char* key, double def){
-    char pat[160]; snprintf(pat,sizeof(pat),"\"%s\"",key);
-    const char* p=strstr(body,pat); if(!p) return def;
-    p=strchr(p,':'); if(!p) return def;
-    p++; while(*p==' '||*p=='\t') p++;
+    const char* p=json_top_value(body,key); if(!p) return def;
+    while(*p==' '||*p=='\t'||*p=='\r'||*p=='\n') p++;
+    if(*p=='"') p++;
     return atof(p);
 }
 
@@ -1641,9 +2026,7 @@ static double jnum(const char* body, const char* key, double def){
 static int call_sdapi(sock_t c, const char* sdapi_path, const char* req_json){
     sock_t u=socket(AF_INET,SOCK_STREAM,0);
     if(u<0){ send_json(c,502,"Bad Gateway","{\"error\":\"upstream socket\"}"); return -1; }
-    struct timeval tv; tv.tv_sec=300; tv.tv_usec=0;
-    setsockopt(u,SOL_SOCKET,SO_RCVTIMEO,(char*)&tv,sizeof(tv));
-    setsockopt(u,SOL_SOCKET,SO_SNDTIMEO,(char*)&tv,sizeof(tv));
+    set_sock_timeout(u, GENERATION_TIMEOUT_SEC);
     struct sockaddr_in a; memset(&a,0,sizeof(a));
     a.sin_family=AF_INET; a.sin_port=htons((uint16_t)g_cfg.inner_port);
     a.sin_addr.s_addr=inet_addr("127.0.0.1");
@@ -1719,10 +2102,17 @@ static void handle_api_gen(sock_t c, const char* path, const char* body){
     jstr(body,"negative_prompt",neg,sizeof(neg),"");
     /* seed 是数字字段 */
     { double sd=jnum(body,"seed",-1); if(sd>=0) snprintf(seed_s,sizeof(seed_s),"%lld",(long long)sd); else snprintf(seed_s,sizeof(seed_s),"-1"); }
-    double cfg=jnum(body,"cfg",g_cfg.cfg_scale);
-    double steps=jnum(body,"steps",g_cfg.steps);
-    double wdt=jnum(body,"width",512), hgt=jnum(body,"height",512);
-    double denoise=jnum(body,"denoise_strength",0.75);
+    /* v1.6.23：兼容 App/第三方客户端的别名，且客户端明确传了尺寸就绝不覆盖。
+       旧版只认 width/height/steps，别的写法会静默落回 512×512/20 步。 */
+    double cfg=json_num_any(body,"cfg_scale","cfg","guidance_scale",NULL,g_cfg.cfg_scale);
+    double steps=json_num_any(body,"steps","num_inference_steps","sample_steps","n_steps",g_cfg.steps);
+    int wdt=0,hgt=0;
+    if(!json_size_any(body,&wdt,&hgt)){
+        wdt=(int)json_num_any(body,"width","image_width",NULL,NULL,512);
+        hgt=(int)json_num_any(body,"height","image_height",NULL,NULL,512);
+    }
+    if(wdt<16) wdt=512; if(hgt<16) hgt=512;
+    double denoise=json_num_any(body,"denoise_strength","strength",NULL,NULL,0.75);
     int is_img2img = !strcmp(path,"/api/img2img");
     size_t imcap = 0;
     if(is_img2img){
@@ -1753,7 +2143,7 @@ static void handle_api_gen(sock_t c, const char* path, const char* body){
         g_engine_alive=1; g_load_start_ms=(long)time(NULL);
         log_line("按需加载模型出图: %s", g_cfg.model_path);
         /* 等待就绪；同时检测引擎是否中途退出（模型损坏等） */
-        int w=0; while(g_running && w<180000){
+        int w=0; while(g_running && w<MODEL_LOAD_TIMEOUT_SEC*1000){
             if(upstream_healthy()) break;
             if(!child_alive()){
                 send_json(c,503,"Service Unavailable",
@@ -1765,7 +2155,7 @@ static void handle_api_gen(sock_t c, const char* path, const char* body){
             poll_sleep_ms(500); w+=500;
         }
         if(!upstream_healthy()){
-            send_json(c,504,"Gateway Timeout","{\"error\":\"模型加载超时（180s）。请检查模型文件。\"}");
+            send_json(c,504,"Gateway Timeout","{\"error\":\"模型加载超时（15 分钟）。请检查模型文件或改用更小的模型。\"}");
             free(img_b64);
             return;
         }
@@ -1838,8 +2228,7 @@ static int dechunk_body(const char* raw, int rawlen, char* out, int outcap, int*
 typedef struct { sock_t c; } ConnArg;
 static void* handle_conn(void* arg) {
     sock_t c = ((ConnArg*)arg)->c; free(arg);
-    struct timeval tv; tv.tv_sec=120; tv.tv_usec=0;
-    setsockopt(c,SOL_SOCKET,SO_RCVTIMEO,(char*)&tv,sizeof(tv));
+    set_sock_timeout(c, 120);
 
     /* v1.6.6 修复：旧版用固定 64KB 栈缓冲读请求体，Content-Length 超过 64KB
        时请求体被静默截断（img2img / 大 JSON 一律失败）。现改为：
@@ -1973,8 +2362,15 @@ static void* handle_conn(void* arg) {
     if(!strcmp(method,"GET") && (!strcmp(path,"/admin") || !strcmp(path,"/gen") || !strcmp(path,"/admin.html"))){
         serve_admin(c); CONN_RETURN();
     }
-    if(!strcmp(method,"GET") && (!strcmp(path,"/") || !strcmp(path,"/index.html"))){
+    if(!strcmp(method,"GET") && (!strcmp(path,"/") || !strcmp(path,"/index.html") || !strcmp(path,"/ui") || !strcmp(path,"/webui"))){
+        /* v1.6.20：引擎就绪时根路径直接给 sd-server 自带网页（文生图/图生图/全参数/上传改图）；
+           未就绪时才退回状态首页，避免用户先看到“功能不全”的页面。 */
+        if(upstream_healthy()){ forward_to_upstream(c, method, "/", buf, NULL, 0, 0); CONN_RETURN(); }
         serve_home(c); CONN_RETURN();
+    }
+    if(!strcmp(method,"GET") && (!strcmp(path,"/favicon.ico") || !strncmp(path,"/assets/",8) || !strncmp(path,"/static/",8))){
+        if(upstream_healthy()){ forward_to_upstream(c, method, path, buf, NULL, 0, 0); CONN_RETURN(); }
+        send_json(c,404,"Not Found","{\"error\":\"no such asset\"}"); CONN_RETURN();
     }
 
     /* ---- 其余全部需要鉴权 ---- */
@@ -1997,14 +2393,17 @@ static void* handle_conn(void* arg) {
 
     /* ---- 对生成类端点补默认 steps/cfg/batch（客户端未带的字段才补，不覆盖） ---- */
     int fwd_len = content_len>0?content_len:0;
+    int orig_fwd_len = fwd_len;
     const char* fwd_body = bodyp;
     char* injected = NULL;
     if(!strcmp(method,"POST") && is_gen_path(path) && fwd_len>0){
         injected = build_injected_body(bodyp, fwd_len, path, &fwd_len);
         if(injected){
             fwd_body = injected;
-            log_line("注入默认参数: steps=%d cfg=%.2f batch=%d (%s)",
-                     g_cfg.steps, g_cfg.cfg_scale, g_cfg.batch_size, path);
+            /* v1.6.23：只有长度真的变了才说明补了字段。旧版每次请求都打印
+               “注入默认参数”，让人误以为服务端覆盖了客户端传来的 256×256/4。 */
+            if(fwd_len>orig_fwd_len)
+                log_line("补全缺失参数 +%d 字节（未覆盖客户端已有字段，%s）", fwd_len-orig_fwd_len, path);
         }
     }
 
@@ -2025,7 +2424,7 @@ static void* handle_conn(void* arg) {
         if(spawn_engine()==0){
             g_engine_alive=1; g_load_start_ms=(long)time(NULL);
             log_line("检测到引擎已卸载，按需拉起并加载模型（出图后将再次释放）……");
-            int w=0; while(g_running && w<120000){ if(upstream_healthy()) break; poll_sleep_ms(500); w+=500; }
+            int w=0; while(g_running && w<MODEL_LOAD_TIMEOUT_SEC*1000){ if(upstream_healthy()) break; poll_sleep_ms(500); w+=500; }
         }
     }
 
@@ -2544,6 +2943,8 @@ static void run_diag(void) {
     printf("版本: %s\n", APP_VERSION);
     printf("程序目录: %s\n", g_progdir);
     printf("数据目录: %s\n", g_datadir);
+    printf("模型仓库: %s\n", g_model_dir);
+    printf("配置文件: %s  (%s)\n", g_config_path, file_size64(g_config_path)>=0?"存在":"不存在");
     /* 引擎二进制 */
     const char* ename =
 #ifdef _WIN32
@@ -2560,8 +2961,11 @@ static void run_diag(void) {
     }
     printf("配置模型路径: %s\n", g_cfg.model_path[0]?g_cfg.model_path:"(未配置)");
     if(g_cfg.model_path[0]){
-        struct stat st;
-        printf("模型文件存在: %s\n", stat(g_cfg.model_path,&st)==0? "是" : "否! 请重新下载");
+        long long msz=0;
+        int mok=model_file_usable(g_cfg.model_path,&msz);
+        printf("模型文件可用: %s  (大小 %lld 字节，已知清单=%lld)\n",
+               mok?"是":"否! 文件缺失/被截断/文件头损坏，请重新下载",
+               msz, catalog_size_for_name(g_cfg.model_path));
     }
     printf("对外端口: %d  上游端口: %d\n", g_cfg.port, g_cfg.inner_port);
     printf("API Key: %s\n", g_cfg.api_key[0]? "已设置(需校验)":"空(无密码)");
@@ -2614,12 +3018,16 @@ int main(int argc, char** argv) {
             g_cfg.enable_api_key=0;
         } else if(!strcmp(argv[i],"--diag")){
             run_diag(); return 0;
+        } else if(!strcmp(argv[i],"--selftest")){
+            return run_selftest();
         } else if(!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h")){
             printf("用法: etserver [--model <路径>] [--port <对外>] [--inner-port <对内>] [--no-wizard] [--no-gui]\n");
             return 0;
         }
     }
 
+    /* v1.8.0：配置/命令行就绪后立即自愈模型路径，启动日志与 UI 显示一致。 */
+    resolve_model_path();
     printf("=== %s %s 启动 ===\n", APP_NAME, APP_VERSION);
     printf("程序目录(引擎): %s\n", g_progdir);
     printf("数据目录(模型/配置): %s\n", g_datadir);
@@ -2628,6 +3036,7 @@ int main(int argc, char** argv) {
     if(!no_wizard && (!has_cfg || g_cfg.model_path[0]==0)) {
         run_wizard();
     }
+    resolve_model_path();
 
     /* v1.5.1 懒加载：启动不预载模型（省内存），对外端口先绑好；
        引擎在首次出图请求时按需拉起并加载模型。 */

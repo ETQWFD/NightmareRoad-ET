@@ -1,22 +1,22 @@
 {
   "name": "Nightmare Road-ET Server",
-  "version": "1.6.15",
-  "versionCode": 175,
-  "tag": "server-1.6.15",
-  "prerelease": false,
+  "version": "1.8.0",
+  "versionCode": 180,
+  "tag": "server-1.8.0",
+  "prerelease": true,
   "channel": "github",
   "platforms": {
     "windows": {
-      "file": "NightmareRoad-ET-Server-1.6.15-windows-x86_64.zip",
-      "size": 145262,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.6.15/NightmareRoad-ET-Server-1.6.15-windows-x86_64.zip"
+      "file": "NightmareRoad-ET-Server-1.8.0-win64.zip",
+      "size": 32400000,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64.zip"
     },
     "linux-x86_64": {
-      "file": "NightmareRoad-ET-Server-1.6.15-linux-x86_64.tar.gz",
-      "size": 142369,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.6.15/NightmareRoad-ET-Server-1.6.15-linux-x86_64.tar.gz"
+      "file": "NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz",
+      "size": 16500000,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz"
     }
   },
-  "notes": "v1.6.15：服务端全面改名 Nightmare Road-ET，仓库地址同步更新。",
+  "notes": "v1.8.0：启动真实探活、下载磁盘预检、HTML 错误页拦截、API Key 固定时间比较、首页转义；Windows x64 / Linux x86_64。",
   "port": 4080
 }
