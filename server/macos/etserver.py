@@ -10,6 +10,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "bin" / "sd-server"
+
+def refresh_engine():
+    global ENGINE
+    for c in (ROOT / "bin" / "sd-server", ROOT / "engine" / "sd-server", ROOT / "sd-server", ROOT / "runtime" / "sd-server"):
+        if c.exists():
+            ENGINE = c
+            return True
+    return False
 LIB = ROOT / "lib"
 WEB = ROOT / "web"
 DATA = ROOT / "data"
@@ -48,7 +56,7 @@ def find_model(explicit):
     return ""
 
 def install_engine():
-    if ENGINE.exists(): return True
+    if refresh_engine(): return True
     log("未找到推理引擎，开始下载 macOS universal 引擎")
     tmp = Path(tempfile.mkdtemp(prefix="nret-mac-engine-"))
     try:
@@ -73,7 +81,10 @@ def install_engine():
         got = list(root.rglob("sd-server"))
         if not got: raise RuntimeError("下载包内没有 sd-server")
         ENGINE.parent.mkdir(parents=True, exist_ok=True); LIB.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(got[0], ENGINE); ENGINE.chmod(0o755)
+        dest = ROOT / "bin" / "sd-server"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(got[0], dest); dest.chmod(0o755)
+        refresh_engine()
         for d in list(root.rglob("*.dylib")):
             shutil.copy2(d, LIB / d.name)
         log(f"引擎安装完成：{ENGINE}")
@@ -214,6 +225,7 @@ def main():
     state_inner = a.inner_port or int(conf.get("inner_port") or 17860)
     state_threads = int(conf.get("threads") or 4); state_args = conf.get("engine_args") or ""
     model = find_model(a.model or conf.get("model_path") or "")
+    refresh_engine()
     if not install_engine():
         log("警告：引擎缺失，服务仍会启动并自动重试下载")
     threading.Thread(target=bootstrap, args=(model, state_inner, state_threads, state_args), daemon=True).start()
