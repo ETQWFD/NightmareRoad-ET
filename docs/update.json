@@ -1,12 +1,12 @@
 {
-  "versionCode": 331,
-  "versionName": "4.0.0-et.256",
-  "title": "Nightmare Road-ET et.256（331）：多文件模型包下载总大小/进度修复",
-  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v331-et.256/NightmareRoad-ET.apk",
-  "size": 165664372,
-  "sha256": "697f5c5202e90e8b02fefdcb481e01ebc6145bcf8785f25c2fe38000858fe9b4",
-  "releaseNotes": "最新版本 et.256（331）\n\n本轮只做一处针对性的小修复：\n\n1) 多文件模型包（DiT/SD 包）下载时，部分 CDN 会拒绝 HEAD 请求。旧逻辑只读取 HEAD 的 Content-Length 来算总大小，取不到就显示“总大小未知”、进度条停在 0%。现在会像单文件下载一样，在 HEAD 失败后自动发 1 字节 Range 请求，读取 Content-Range 里的真实总长度；只要源站支持 Range，就能正常显示百分比和剩余量。\n2) 继续保留 et.255 的防截断逻辑：206 响应的 1 字节 Content-Length 不会被当成文件总大小，下载完成仍按真实字节数校验。\n3) 官网帮助页补充说明：极少数站点既不允许 HEAD 也不支持 Range 时，界面仍会显示“总大小未知”，但文件会继续下载，完成后按实际字节数校验。\n\n本版未改动生成、模型转换、账号与额度逻辑，升级覆盖安装即可。\n\n构建校验：basicRelease 编译通过；37 项单元测试 0 失败；APK 仍为 arm64-v8a / armeabi-v7a / x86_64 单包，ET 证书签名，versionCode 331 / 4.0.0-et.256。\n",
-  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v331-et.256/NightmareRoad-ET.apk",
+  "versionCode": 332,
+  "versionName": "4.0.0-et.257",
+  "title": "Nightmare Road-ET et.257（332）：图片社区收藏人数/下载量/月榜 + 服务端 1.8.0",
+  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v332-et.257/NightmareRoad-ET.apk",
+  "size": 165688320,
+  "sha256": "1d4de352964b25cfe43534b49795045646a2223db3756591058b5f4e0fe41d78",
+  "releaseNotes": "最新版本 et.257（332）\n\n本次更新：\n1) 图片社区新增作品统计：每张作品显示收藏人数、总下载次数、本月下载次数；预览详情和“我的收藏”也能看到。\n2) 新增“图片社区月榜”：按作品下载次数排名，支持“本月榜 / 上月结算”切换；每月 1 日结算上月榜，并把本月计数清零，下个月继续累计。收藏人数只统计登录账号，同一账号去重；游客收藏不计入社区人数。\n3) 收藏按钮会实时显示人数，收藏/取消收藏会同步到社区统计；下载购买成功后自动累加作品总下载与本月下载。\n4) 修复服务端管理端“显示已启动但进程已退出”的假运行状态、模型下载磁盘空间不足和把 HTML 错误页当模型保存的问题（服务端同步 1.8.0）。\n5) 服务端首页对模型名/路径做 HTML 转义，API Key 改为固定时间比较；服务端 1.8.0 同时提供 Windows、Linux、macOS/Max 发行包。\n\n构建校验：basicRelease 编译通过；37 项单元测试 0 失败；单包包含 arm64-v8a / armeabi-v7a / x86_64，ET 证书签名；versionCode 332 / 4.0.0-et.257。升级覆盖安装即可，原有模型、额度、收藏和账号不受影响。",
+  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v332-et.257/NightmareRoad-ET.apk",
   "force": false,
   "mustUpdate": false
 }

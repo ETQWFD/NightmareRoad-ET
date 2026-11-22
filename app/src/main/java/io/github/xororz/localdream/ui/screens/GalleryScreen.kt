@@ -468,6 +468,12 @@ fun GalleryScreen(navController: NavController) {
                             )
                             Text(g.author, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                             Text("额度 ${g.price}", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                "♥ ${g.favoriteCount} · ↓ ${g.downloadCount}",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -789,34 +795,77 @@ fun GalleryScreen(navController: NavController) {
         )
     }
     if (showRank) {
-        var rows by remember { mutableStateOf<List<Pair<String, Int>>?>(null) }
-        androidx.compose.runtime.LaunchedEffect(Unit) {
-            rows = withContext(Dispatchers.IO) { runCatching { GalleryClient.monthlyRanking() }.getOrDefault(emptyList()) }
+        var rankPeriod by remember { mutableStateOf("current") }
+        var rows by remember { mutableStateOf<List<GalleryClient.ImageRank>?>(null) }
+        androidx.compose.runtime.LaunchedEffect(rankPeriod) {
+            rows = withContext(Dispatchers.IO) {
+                runCatching { GalleryClient.monthlyImageRanking(rankPeriod) }.getOrDefault(emptyList())
+            }
         }
         AlertDialog(
             onDismissRequest = { showRank = false },
-            title = { Text("本月下载榜 · 前 18 名") },
+            title = { Text("图片社区月榜") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = rankPeriod == "current",
+                            onClick = { rankPeriod = "current" },
+                            label = { Text("本月榜") },
+                        )
+                        FilterChip(
+                            selected = rankPeriod == "previous",
+                            onClick = { rankPeriod = "previous" },
+                            label = { Text("上月结算") },
+                        )
+                    }
+                    Text(
+                        "每月 1 日结算上月榜，并清零本月计数；按作品下载次数排名。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
                     val list = rows
                     if (list == null) {
                         Text("加载中…", style = MaterialTheme.typography.bodySmall)
                     } else if (list.isEmpty()) {
-                        Text("本月还没有下载记录", style = MaterialTheme.typography.bodySmall)
+                        Text("这个周期还没有下载记录", style = MaterialTheme.typography.bodySmall)
                     } else {
-                        list.take(18).forEachIndexed { i, (author, count) ->
+                        list.take(18).forEachIndexed { i, rank ->
                             val medal = when (i) {
                                 0 -> "🥇"; 1 -> "🥈"; 2 -> "🥉"; else -> "${i + 1}."
                             }
+                            val match = items.firstOrNull { it.name == rank.name }
                             androidx.compose.foundation.layout.Row(
                                 modifier = Modifier.fillMaxWidth()
-                                    .clickable { showRank = false; profileAuthor = author }
+                                    .clickable {
+                                        showRank = false
+                                        if (match != null) previewItem = match else profileAuthor = rank.author
+                                    }
                                     .padding(vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(medal, modifier = Modifier.width(38.dp))
-                                Text("@$author", modifier = Modifier.weight(1f), maxLines = 1)
-                                Text("$count 次", style = MaterialTheme.typography.labelSmall)
+                                Text(medal, modifier = Modifier.width(34.dp))
+                                if (match != null) {
+                                    FallbackImage(
+                                        urls = match.thumbUrls.ifEmpty { match.urls },
+                                        contentDescription = rank.title,
+                                        modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        rank.title.ifBlank {
+                                            rank.name.substringAfterLast('/').substringBeforeLast(".png")
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                    )
+                                    Text("@${rank.author}", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                }
+                                Text("${rank.count} 次", style = MaterialTheme.typography.labelSmall)
                             }
                             androidx.compose.material3.HorizontalDivider()
                         }
@@ -890,6 +939,12 @@ fun GalleryScreen(navController: NavController) {
                                     Text(
                                         "原图已下架 / 未加载，可从社区列表打开",
                                         style = MaterialTheme.typography.labelSmall,
+                                    )
+                                } else {
+                                    Text(
+                                        "♥ ${match.favoriteCount} 人收藏 · ↓ ${match.downloadCount} 次下载",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             }
@@ -1361,18 +1416,31 @@ private fun PreviewDialog(
                     "购买后 ${100 - 15}% 额度归作者 @${item.author}，平台抽取 15%",
                     style = MaterialTheme.typography.labelSmall,
                 )
+                Text(
+                    "♥ ${item.favoriteCount} 人收藏 · ↓ ${item.downloadCount} 次下载 · 本月 ${item.monthDownloadCount} 次",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 val favKey = "${item.name}|${item.author}|${item.ts}"
                 var fav by remember { mutableStateOf(FavoriteStore.contains(ctx, favKey)) }
+                var favCount by remember { mutableStateOf(item.favoriteCount) }
                 TextButton(onClick = {
-                    if (fav) FavoriteStore.remove(ctx, favKey) else FavoriteStore.add(ctx, favKey)
-                    fav = !fav
+                    val adding = !fav
+                    if (adding) FavoriteStore.add(ctx, favKey) else FavoriteStore.remove(ctx, favKey)
+                    fav = adding
+                    favCount = (favCount + if (adding) 1 else -1).coerceAtLeast(0)
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching { GalleryClient.setFavorite(item, FavoriteStore.owner(ctx), adding) }
+                        }
+                    }
                 }) {
                     Icon(
                         if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = null,
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(if (fav) "已收藏" else "收藏")
+                    Text((if (fav) "已收藏" else "收藏") + " $favCount")
                 }
                 run {
                     val myLogin = io.github.xororz.localdream.cloud.SecureTokenStore(ctx)
@@ -1490,6 +1558,7 @@ private suspend fun purchaseItem(ctx: Context, item: GalleryClient.GalleryItem):
             saveToGallery(ctx, "NightmareRoad-ET_${item.name.replace('/', '_')}", out.toByteArray())
             qm.consume(ctx, item.price.toLong())
             runCatching { GalleryClient.bumpDownload(item.author) }
+            runCatching { GalleryClient.bumpImageDownload(item) }
             // 85% to the author, 15% to the platform; failures never block the
             // buyer from getting the picture they paid for.
             runCatching {

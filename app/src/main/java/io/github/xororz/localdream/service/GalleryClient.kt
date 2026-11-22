@@ -107,6 +107,20 @@ object GalleryClient {
         val urls: List<String> = listOf(url),
         /** Small JPEG previews; empty means the full PNG is used. */
         val thumbUrls: List<String> = emptyList(),
+        /** Unique accounts that marked this work as favorite. */
+        val favoriteCount: Int = 0,
+        /** All-time paid downloads. */
+        val downloadCount: Int = 0,
+        /** Paid downloads in the current calendar month. */
+        val monthDownloadCount: Int = 0,
+    )
+
+    /** One row of the image community monthly board. */
+    data class ImageRank(
+        val name: String,
+        val author: String,
+        val title: String,
+        val count: Int,
     )
 
     /** 上传结果：ok=false 时 reason 可直接展示给用户。 */
@@ -369,9 +383,13 @@ object GalleryClient {
                     metas = metas + runCatching { fetchMetas(missing) }.getOrDefault(emptyMap())
                 }
             }
+            // et.257: counts live in one small stats/index.json instead of one
+            // extra request per image. Missing file => zeroes, never an empty list.
+            val imageStats = runCatching { fetchImageStats() }.getOrNull()
             names.map { n ->
                 val stem = n.substringBeforeLast(".png")
                 val m = metas[stem]
+                val st = imageStats?.optJSONObject(statKey(n))
                 // Mirror chain, jsDelivr first because it is reachable in China.
                 val mirrors = listOf(
                     "https://cdn.jsdelivr.net/gh/ETQWFD/NightmareRoad-ET-Gallery@main/png/$n",
@@ -390,6 +408,9 @@ object GalleryClient {
                     m?.optLong("ts", 0L) ?: 0L,
                     mirrors,
                     thumbs,
+                    st?.optInt("favoriteCount", 0) ?: 0,
+                    st?.optInt("totalDownloads", 0) ?: 0,
+                    st?.optInt("monthDownloads", 0) ?: 0,
                 )
             }.sortedByDescending { it.ts }.also {
                 cached = mergePending(it)
@@ -601,6 +622,130 @@ object GalleryClient {
             )
             UploadResult(false, e.message ?: e.javaClass.simpleName)
         }
+    }
+
+    // ── 图片社区统计（收藏人数 / 总下载 / 本月下载） ───────────────────
+    // 所有计数集中在一个很小的 stats/index.json 里，列表只多一次请求；
+    // 写回时带 sha 并在 409 冲突时重读重试，避免多人同时下载互相覆盖。
+    private fun monthNow(): String =
+        java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US).format(java.util.Date())
+
+    private fun previousMonth(): String {
+        val c = java.util.Calendar.getInstance()
+        c.add(java.util.Calendar.MONTH, -1)
+        return java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US).format(c.time)
+    }
+
+    private fun statKey(name: String): String =
+        name.removePrefix("png/").removeSuffix(".png").replace('/', '_').replace('\\', '_')
+
+    /** 解码 Contents API 的 base64 信封；返回 null 表示文件不存在/不是 JSON。 */
+    private fun decodeContents(text: String): JSONObject? = runCatching {
+        val env = JSONObject(text)
+        val b64 = env.optString("content", "").replace("\n", "")
+        if (b64.isBlank()) null
+        else JSONObject(String(Base64.getDecoder().decode(b64), Charsets.UTF_8))
+    }.getOrNull()
+
+    private fun statsIndexSnapshot(): Pair<JSONObject, String> {
+        val (code, text) = http("$API/stats/index.json", "GET")
+        if (code != 200) return JSONObject().put("images", JSONObject()) to ""
+        val env = runCatching { JSONObject(text) }.getOrNull() ?: return JSONObject().put("images", JSONObject()) to ""
+        val obj = decodeContents(text)
+        return (obj ?: JSONObject().put("images", JSONObject())) to env.optString("sha", "")
+    }
+
+    private fun fetchImageStats(): JSONObject? {
+        val (root, _) = statsIndexSnapshot()
+        return root.optJSONObject("images")
+    }
+
+    /** 原子式读改写 stats/index.json；成功返回 true。 */
+    private fun mutateImageStats(item: GalleryItem, block: (JSONObject, String) -> Boolean): Boolean {
+        val token = BuildConfig.GALLERY_TOKEN
+        if (token.isBlank()) return false
+        repeat(3) {
+            val (root, sha) = statsIndexSnapshot()
+            val images = root.optJSONObject("images") ?: JSONObject().also { root.put("images", it) }
+            val key = statKey(item.name)
+            val st = images.optJSONObject(key) ?: JSONObject().also { images.put(key, it) }
+            st.put("name", item.name)
+            st.put("author", item.author)
+            st.put("title", item.title)
+            if (!block(st, monthNow())) return false
+            st.put("favoriteCount", st.optJSONArray("favorites")?.length() ?: 0)
+            st.put("updated", System.currentTimeMillis())
+            val body = JSONObject()
+                .put("message", "gallery stats ${item.name}")
+                .put("content", Base64.getEncoder().encodeToString(root.toString().toByteArray()))
+            if (sha.isNotBlank()) body.put("sha", sha)
+            val (code, _) = httpWithToken("$API/stats/index.json", "PUT", body.toString().toByteArray(), token)
+            if (code in 200..201) return true
+            if (code != 409 && code != 422) return false
+        }
+        return false
+    }
+
+    suspend fun bumpImageDownload(item: GalleryItem): Unit = withContext(Dispatchers.IO) {
+        mutateImageStats(item) { st, month ->
+            val oldMonth = st.optString("month", "")
+            if (oldMonth.isNotBlank() && oldMonth != month) {
+                st.put("lastMonth", oldMonth)
+                st.put("lastMonthDownloads", st.optInt("monthDownloads", 0))
+                st.put("monthDownloads", 0)
+            }
+            st.put("month", month)
+            st.put("totalDownloads", st.optInt("totalDownloads", 0) + 1)
+            st.put("monthDownloads", st.optInt("monthDownloads", 0) + 1)
+            true
+        }
+        Unit
+    }
+
+    /** 收藏/取消收藏；favorites 里只存登录账号，guest 不计人数。 */
+    suspend fun setFavorite(item: GalleryItem, login: String, favorite: Boolean): Unit = withContext(Dispatchers.IO) {
+        val who = login.trim().lowercase()
+        if (who.isBlank() || who == "guest") return@withContext
+        mutateImageStats(item) { st, _ ->
+            val arr = st.optJSONArray("favorites") ?: JSONArray().also { st.put("favorites", it) }
+            var found = -1
+            for (i in 0 until arr.length()) if (arr.optString(i).equals(who, true)) { found = i; break }
+            if (favorite && found < 0) arr.put(who)
+            if (!favorite && found >= 0) arr.remove(found)
+            st.put("favoriteCount", arr.length())
+            true
+        }
+        Unit
+    }
+
+    /** 图片月榜；period=current 本月，period=previous 上月结算。 */
+    suspend fun monthlyImageRanking(period: String = "current"): List<ImageRank> = withContext(Dispatchers.IO) {
+        val root = runCatching { statsIndexSnapshot().first }.getOrNull() ?: return@withContext emptyList()
+        val images = root.optJSONObject("images") ?: return@withContext emptyList()
+        val current = monthNow()
+        val previous = previousMonth()
+        val out = ArrayList<ImageRank>()
+        images.keys().forEach { key ->
+            val st = images.optJSONObject(key) ?: return@forEach
+            val count = if (period == "previous") {
+                when {
+                    st.optString("month", "") == previous -> st.optInt("monthDownloads", 0)
+                    st.optString("lastMonth", "") == previous -> st.optInt("lastMonthDownloads", 0)
+                    else -> 0
+                }
+            } else if (st.optString("month", "") == current) {
+                st.optInt("monthDownloads", 0)
+            } else 0
+            if (count > 0) out.add(
+                ImageRank(
+                    st.optString("name", key),
+                    st.optString("author", "?"),
+                    st.optString("title", ""),
+                    count,
+                ),
+            )
+        }
+        out.sortedByDescending { it.count }.take(30)
     }
 
     /** 2026-11：本月下载榜——每次下载给作者计数 +1（stats/{作者}.json）。 */
