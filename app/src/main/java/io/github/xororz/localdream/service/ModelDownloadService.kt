@@ -537,20 +537,14 @@ class ModelDownloadService : Service() {
             }
     }
 
-    /** Published size of a remote file, or -1 when the server does not say. */
+    /** Published size of a remote file, or -1 when the server does not say.
+     *  et.256: HEAD-only probing reported "总大小未知" on CDNs that reject HEAD
+     *  but answer Range requests. Reuse the same HEAD -> 1-byte Range fallback
+     *  as single-file downloads so package progress can show a real percentage. */
     private fun remoteSize(url: String): Long {
         for (candidate in pickFastest(url)) {
-            val request = Request.Builder().url(candidate).head().build()
-            val size = runCatching {
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        response.header("Content-Length")?.toLongOrNull() ?: -1L
-                    } else {
-                        -1L
-                    }
-                }
-            }.getOrDefault(-1L)
-            if (size >= 0L) return size
+            val (code, length) = headCodeAndLength(candidate)
+            if (code in 200..399 && length > 1L) return length
         }
         return -1L
     }

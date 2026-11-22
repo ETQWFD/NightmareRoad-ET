@@ -1,12 +1,12 @@
 {
-  "versionCode": 330,
-  "versionName": "4.0.0-et.255",
-  "title": "Nightmare Road-ET et.255（330）：糊图/模型下载/GPU 生效修复 + 6000 永久额度补偿",
-  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v330-et.255/NightmareRoad-ET.apk",
-  "size": 165664588,
-  "sha256": "049e233d2c3395719b815ccfdf0f6f43a6146b1ca70673a14e101a50f68440e2",
-  "releaseNotes": "最新版本 et.255（330）\n\n本轮针对用户反馈的“512×512 / 14 步 / CFG 4 / GPU 却生成糊图”和“模型无法下载”做了逐项排查与修复：\n\n1) GPU 真正生效：诊断设备是 OPPO PLA110（天玑 + Mali-G615 MC6）。旧逻辑只给天玑 9000 以上放行 OpenCL，其余天玑一律强制 CPU，所以界面选 GPU、引擎仍按 CPU 跑（日志约 20 秒/步）。现在 Mali-G57/G68/G615/G76/G77 等中端 GPU 也允许 OpenCL，建会话失败会自动回落 CPU，不会卡死。\n2) 模型下载加固：修复把 206 分段响应的 1 字节 Content-Length 当成“文件总大小”的截断风险；现在只认 Content-Range 的真实总长度，异常长度直接忽略并改用整文件 GET，下载完成后再校验最终字节数。\n3) 下载源核查：作者仓库 xororz/sd-mnn 没有被删除。AnythingV5.zip 仍在线，实际大小 1,191,044,427 字节；hf-mirror 的 206 响应也返回了正确的 content-range。之前是客户端探测/续传判断的问题，不是作者删库。\n4) 糊图参数提示：低步数（≤16）+ Euler A + 低 CFG 在 SD1.5 上容易糊；高级参数页会直接提示改用 20 步以上、CFG 5–7、DPM++ 2M Karras。\n5) 诊断报告修正：模型目录的 ready 以前检查一个永远不存在的占位文件，报告里出现 finished:true ready:false 的误导组合；现在按引擎真实可加载的目录布局判断。\n6) 内容安全硬闸门：露骨性内容、以及涉及未成年人的性化内容，会在扣额度之前被拒绝；局域网 API 同样生效，不再受“内容限制”开关影响。\n7) 永久额度补偿：每位用户可在启动弹窗中确认领取 6000 额度永久提升，每 7 天额度由 128 万提升到 128.6 万，永久保留、不随每周重置清零；每个账号仅可领取一次。\n\n构建校验：basicRelease 编译通过；37 项单元测试 0 失败（ChatModel 13、Example 1、ModelPackageIntegrity 4、ImageDiagnostics 15、PromptSafety 4）；APK 含 arm64-v8a / armeabi-v7a / x86_64，ET 证书签名，versionCode 330 / 4.0.0-et.255。\n",
-  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v330-et.255/NightmareRoad-ET.apk",
+  "versionCode": 331,
+  "versionName": "4.0.0-et.256",
+  "title": "Nightmare Road-ET et.256（331）：多文件模型包下载总大小/进度修复",
+  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v331-et.256/NightmareRoad-ET.apk",
+  "size": 165664372,
+  "sha256": "697f5c5202e90e8b02fefdcb481e01ebc6145bcf8785f25c2fe38000858fe9b4",
+  "releaseNotes": "最新版本 et.256（331）\n\n本轮只做一处针对性的小修复：\n\n1) 多文件模型包（DiT/SD 包）下载时，部分 CDN 会拒绝 HEAD 请求。旧逻辑只读取 HEAD 的 Content-Length 来算总大小，取不到就显示“总大小未知”、进度条停在 0%。现在会像单文件下载一样，在 HEAD 失败后自动发 1 字节 Range 请求，读取 Content-Range 里的真实总长度；只要源站支持 Range，就能正常显示百分比和剩余量。\n2) 继续保留 et.255 的防截断逻辑：206 响应的 1 字节 Content-Length 不会被当成文件总大小，下载完成仍按真实字节数校验。\n3) 官网帮助页补充说明：极少数站点既不允许 HEAD 也不支持 Range 时，界面仍会显示“总大小未知”，但文件会继续下载，完成后按实际字节数校验。\n\n本版未改动生成、模型转换、账号与额度逻辑，升级覆盖安装即可。\n\n构建校验：basicRelease 编译通过；37 项单元测试 0 失败；APK 仍为 arm64-v8a / armeabi-v7a / x86_64 单包，ET 证书签名，versionCode 331 / 4.0.0-et.256。\n",
+  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v331-et.256/NightmareRoad-ET.apk",
   "force": false,
   "mustUpdate": false
 }
