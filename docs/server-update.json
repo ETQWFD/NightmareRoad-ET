@@ -7,25 +7,33 @@
   "channel": "github",
   "platforms": {
     "windows": {
-      "file": "NightmareRoad-ET-Server-1.8.0-win64.zip",
-      "size": 31548297,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64.zip",
-      "sha256": "c6950e89a357e90e32ad7c14b69b3562e8820c5b38cb2626fd1cc0f48f41c08d"
+      "file": "NightmareRoad-ET-Server-1.8.0-win64-setup.exe",
+      "size": 21232832,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64-setup.exe",
+      "sha256": "98452796b8c63f3ac89697b3f30e8b1b99849e9a4d81657ba3dd2b5fe7e43628",
+      "requires_admin": true,
+      "portable": {
+        "file": "NightmareRoad-ET-Server-1.8.0-win64.zip",
+        "size": 31343225,
+        "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64.zip",
+        "sha256": "8917d7dfc30f9f69c5cb84852c74b0375efd4dc5b302376e7e7bddc50e9877cc"
+      }
     },
     "linux-x86_64": {
       "file": "NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz",
-      "size": 16569262,
+      "size": 16571372,
       "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz",
-      "sha256": "2cc0e787e59b88b71d0e23981d3a8ca64bd88b80a68102384c99627352d4c24b"
+      "sha256": "20b3f084d2b80cdd3fd34fb28481a1c4030b445ff61c469962bc257b2512b594"
     },
-    "macos-max-source": {
-      "file": "NightmareRoad-ET-Server-1.8.0-macos-max-src.zip",
-      "size": 84548,
-      "sha256": "3cbe2c0b1d49e5941f4e961763056256034b1e6dbab6a0cddfce7fbba19c0d38",
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-macos-max-src.zip",
-      "note": "macOS 12+ 源码一键构建包（需 Xcode CLT + cmake）"
+    "macos-universal": {
+      "file": "NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
+      "size": 36848134,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
+      "sha256": "500a080278fe6c28ae6db9a0372fa3a945e43db31059c88975c56ad43ba68c38",
+      "arch": "arm64 + x86_64",
+      "engine_asset": "NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz"
     }
   },
-  "notes": "v1.8.0：启动真实探活、下载磁盘预检、HTML 错误页拦截、API Key 固定时间比较、首页转义；Windows x64 / Linux x86_64。",
+  "notes": "v1.8.0：Python 管理端与 C 外壳都会在引擎缺失时自动从 GitHub 下载并安装；Windows 安装包需要管理员权限；Windows x64 / Linux x86_64 / macOS universal（arm64 + x86_64）。",
   "port": 4080
 }

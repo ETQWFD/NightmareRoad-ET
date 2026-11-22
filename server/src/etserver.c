@@ -104,6 +104,7 @@
 static void wu8(const wchar_t* w, char* s, int sn);   /* 前置声明：网卡名 UTF-16->UTF-8 */
 #endif
 static int find_engine(char* out, int cap);   /* v1.6.21 前置声明：spawn 与启动检查共用同一套路径 */
+static int auto_install_engine(void); /* v1.8.1 引擎缺失自动下载 */
 #define MAX_LINE           8192
 #define MAX_BODY_BYTES     (32*1024*1024)  /* v1.6.6：请求体上限 32MB，超出返回 413 */
 
@@ -1291,7 +1292,10 @@ static int spawn_engine(void) {
         /* v1.6.21 关键修复：此前 spawn 只找 程序目录/bin/上级，漏了 engine\ 子目录，
            导致 find_engine 认为存在、spawn 却报“找不到推理引擎”。统一走 find_engine。 */
         if(!find_engine(engine,sizeof(engine))){
-            if(!g_engine_missing){
+            if(auto_install_engine() && find_engine(engine,sizeof(engine))) {
+                g_engine_missing=0;
+                log_line("自动下载后引擎可用: %s", engine);
+            } else if(!g_engine_missing){
                 g_engine_missing=1;
                 log_line("==================== 严重：找不到推理引擎 ====================");
                 log_line("缺少文件: %s", ename);
@@ -1569,6 +1573,53 @@ static void send_html(sock_t c, const char* html) {
 #else
 #define ENGINE_FILE_NAME "sd-server"
 #endif
+
+/* v1.8.1: 引擎缺失时从官方 Release 自动下载对应平台的引擎资产。
+   只用系统自带工具：Windows PowerShell（Invoke-WebRequest + Expand-Archive），
+   Linux/macOS 用 curl + tar；下载后重新走 find_engine。 */
+static volatile int g_engine_autodl_tried = 0;
+static int auto_install_engine(void) {
+    if (g_engine_autodl_tried) return 0;
+    g_engine_autodl_tried = 1;
+#ifdef _WIN32
+    const char* url = "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-win64.zip";
+    char tmp[MAX_PATH], zip[MAX_PATH], eng[MAX_PATH], cmd[4096];
+    GetTempPathA(MAX_PATH, tmp);
+    snprintf(zip, sizeof(zip), "%snret-engine.zip", tmp);
+    snprintf(eng, sizeof(eng), "%s%sengine", g_progdir, DIRSEP);
+    snprintf(cmd, sizeof(cmd),
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+        "try { Invoke-WebRequest -Uri '%s' -OutFile '%s' -UseBasicParsing; "
+        "New-Item -ItemType Directory -Force -Path '%s' | Out-Null; "
+        "Expand-Archive -Path '%s' -DestinationPath '%s' -Force } catch { exit 1 }\"",
+        url, zip, eng, zip, eng);
+#else
+    const char* url =
+#ifdef __APPLE__
+        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz";
+#else
+        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-linux-x86_64.tar.gz";
+#endif
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+        "curl -fL --retry 3 --connect-timeout 15 -o '%s/nret-engine.tar.gz' '%s' && "
+        "mkdir -p '%s/bin' '%s/engine' && tar -xzf '%s/nret-engine.tar.gz' -C '%s'",
+        g_progdir, url, g_progdir, g_progdir, g_progdir, g_progdir);
+#endif
+    log_line("检测到推理引擎缺失，开始自动下载官方引擎：%s", url);
+    int rc = system(cmd);
+    if (rc != 0) {
+        log_line("引擎自动下载/解压失败（exit=%d），请检查网络或手动导入引擎。", rc);
+        return 0;
+    }
+    char got[1280];
+    if (find_engine(got, sizeof(got))) {
+        log_line("引擎自动下载完成：%s", got);
+        return 1;
+    }
+    log_line("引擎自动下载执行成功，但仍未找到 %s，请检查压缩包布局。", ENGINE_FILE_NAME);
+    return 0;
+}
 
 static int find_engine(char* out, int cap) {
     static const char* subs[] = { "", "bin", "engine", "bin" DIRSEP "engine", "runtime" };
