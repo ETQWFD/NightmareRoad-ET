@@ -27,9 +27,9 @@
     },
     "macos-universal": {
       "file": "NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
-      "size": 36848134,
+      "size": 36850036,
       "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
-      "sha256": "500a080278fe6c28ae6db9a0372fa3a945e43db31059c88975c56ad43ba68c38",
+      "sha256": "0aa6dd786be9f7e9b73b284b817c4d0d29c81df5a718ef2c02c67a976c909754",
       "arch": "arm64 + x86_64",
       "engine_asset": "NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz"
     }
