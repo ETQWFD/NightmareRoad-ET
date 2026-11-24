@@ -1,39 +1,39 @@
 {
   "name": "Nightmare Road-ET Server",
-  "version": "1.8.0",
-  "versionCode": 180,
-  "tag": "server-1.8.0",
+  "version": "1.8.1",
+  "versionCode": 181,
+  "tag": "server-1.8.1",
   "prerelease": true,
   "channel": "github",
   "platforms": {
     "windows": {
-      "file": "NightmareRoad-ET-Server-1.8.0-win64-setup.exe",
-      "size": 21232832,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64-setup.exe",
-      "sha256": "98452796b8c63f3ac89697b3f30e8b1b99849e9a4d81657ba3dd2b5fe7e43628",
+      "file": "NightmareRoad-ET-Server-1.8.1-win64-setup.exe",
+      "size": 21228024,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-win64-setup.exe",
+      "sha256": "a41a44c736f8fc4728a75a50dd09301b0b07d621ce21ab308aa8dd9a22ddd1b8",
       "requires_admin": true,
       "portable": {
-        "file": "NightmareRoad-ET-Server-1.8.0-win64.zip",
-        "size": 31343225,
-        "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-win64.zip",
-        "sha256": "8917d7dfc30f9f69c5cb84852c74b0375efd4dc5b302376e7e7bddc50e9877cc"
+        "file": "NightmareRoad-ET-Server-1.8.1-win64.zip",
+        "size": 31551257,
+        "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-win64.zip",
+        "sha256": "f4ccc7bcac27ae212bcc616ffb78873c8a8c0420ebd60faedcd72ac7d6244396"
       }
     },
     "linux-x86_64": {
-      "file": "NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz",
-      "size": 16571372,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-linux-x86_64.tar.gz",
-      "sha256": "20b3f084d2b80cdd3fd34fb28481a1c4030b445ff61c469962bc257b2512b594"
+      "file": "NightmareRoad-ET-Server-1.8.1-linux-x86_64.tar.gz",
+      "size": 16574959,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-linux-x86_64.tar.gz",
+      "sha256": "b38e4518220c7f2c47b3e3625cf90d71b90e0862c8cccab46374d3a8fa391f36"
     },
     "macos-universal": {
-      "file": "NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
-      "size": 36850036,
-      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-macos-universal.tar.gz",
-      "sha256": "0aa6dd786be9f7e9b73b284b817c4d0d29c81df5a718ef2c02c67a976c909754",
+      "file": "NightmareRoad-ET-Server-1.8.1-macos-universal.tar.gz",
+      "size": 36825985,
+      "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-macos-universal.tar.gz",
+      "sha256": "262f3b3a292a31ba8f23d068ed127d8184bc58dac6a63ede8f78fd1c14397d95",
       "arch": "arm64 + x86_64",
-      "engine_asset": "NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz"
+      "engine_asset": "NightmareRoad-ET-Server-1.8.1-engine-macos-universal.tar.gz"
     }
   },
-  "notes": "v1.8.0：Python 管理端与 C 外壳都会在引擎缺失时自动从 GitHub 下载并安装；Windows 安装包需要管理员权限；Windows x64 / Linux x86_64 / macOS universal（arm64 + x86_64）。",
+  "notes": "v1.8.1：手机端取消未开启内容限制时的自动拦截与模型自带 NSFW 检查；服务端内容限制仍默认关闭，仅在管理端勾选后生效；Windows 安装包需管理员权限。",
   "port": 4080
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nightmare Road-ET Server 1.8.0 macOS launcher.
+"""Nightmare Road-ET Server 1.8.1 macOS launcher.
 
 纯 Python 外壳：启动 sd-server、代理 /sdapi、提供 /admin 与 /healthz。
 这样 macOS 包不需要 Mach-O 编译外壳，引擎仍使用官方 universal sd-server。
@@ -21,8 +21,8 @@ def refresh_engine():
 LIB = ROOT / "lib"
 WEB = ROOT / "web"
 DATA = ROOT / "data"
-URL = "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz"
-VERSION = "1.8.0"
+URL = "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-engine-macos-universal.tar.gz"
+VERSION = "1.8.1"
 log_lock = threading.Lock()
 
 def log(msg):
@@ -146,7 +146,7 @@ def bootstrap(model, inner, threads, args):
     start_engine(model, inner, threads, args)
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "NightmareRoadET/1.8.0"
+    server_version = "NightmareRoadET/1.8.1"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *a):

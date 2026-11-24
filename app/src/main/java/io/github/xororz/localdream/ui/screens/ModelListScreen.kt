@@ -2372,7 +2372,7 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                     }
                     // Appearance (theme) section
                     item { AppearanceSection() }
-                    // et.31: content restriction switch (default ON, persisted).
+                    // et.31/258: content restriction switch (default OFF, persisted).
                     item {
                         val prefs = context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
                         var contentRestricted by remember {

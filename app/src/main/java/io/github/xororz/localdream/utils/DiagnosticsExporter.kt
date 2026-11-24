@@ -26,8 +26,8 @@ object DiagnosticsExporter {
 
     /** URLs probed for reachability in the report (final host / code / size). */
     private val PROBE_URLS = listOf(
-        "https://huggingface.co/xororz/sd-mnn/resolve/main/AnythingV5.zip",
         "https://hf-mirror.com/xororz/sd-mnn/resolve/main/AnythingV5.zip",
+        "https://huggingface.co/xororz/sd-mnn/resolve/main/AnythingV5.zip",
     )
 
     data class Result(val file: File, val error: String? = null)

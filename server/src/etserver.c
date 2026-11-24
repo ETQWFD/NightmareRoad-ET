@@ -2,7 +2,7 @@
  * Nightmare Road-ET Server - 本地 AI 出图 HTTP API 外壳
  * ---------------------------------------------------------------------------
  * 版权所有 (c) 2026  Nightmare Road-ET Server  (ET)
- * 版本: 1.8.0
+ * 版本: 1.8.1
  *
  * 本程序是一层“外壳 / 鉴权反向代理 / 看门狗”，真实的出图推理由子进程
  * stable-diffusion.cpp 的 sd-server 提供（MIT 许可，上游仓库
@@ -91,7 +91,7 @@
 
 /* ============================ 全局配置 ============================ */
 #define APP_NAME      "Nightmare Road-ET Server"
-#define APP_VERSION   "1.8.0"
+#define APP_VERSION   "1.8.1"
 #define MODEL_LOAD_TIMEOUT_SEC 900
 #define GENERATION_TIMEOUT_SEC 900
 #define COPYRIGHT_STR "Copyright (C) 2026 etc"
@@ -1582,7 +1582,7 @@ static int auto_install_engine(void) {
     if (g_engine_autodl_tried) return 0;
     g_engine_autodl_tried = 1;
 #ifdef _WIN32
-    const char* url = "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-win64.zip";
+    const char* url = "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-engine-win64.zip";
     char tmp[MAX_PATH], zip[MAX_PATH], eng[MAX_PATH], cmd[4096];
     GetTempPathA(MAX_PATH, tmp);
     snprintf(zip, sizeof(zip), "%snret-engine.zip", tmp);
@@ -1596,9 +1596,9 @@ static int auto_install_engine(void) {
 #else
     const char* url =
 #ifdef __APPLE__
-        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-macos-universal.tar.gz";
+        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-engine-macos-universal.tar.gz";
 #else
-        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.0/NightmareRoad-ET-Server-1.8.0-engine-linux-x86_64.tar.gz";
+        "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/server-1.8.1/NightmareRoad-ET-Server-1.8.1-engine-linux-x86_64.tar.gz";
 #endif
     char cmd[4096];
     snprintf(cmd, sizeof(cmd),

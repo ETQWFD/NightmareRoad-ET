@@ -218,9 +218,9 @@ class LanImageService : Service() {
             denoiseStrength: Float,
             n: Int,
         ): List<String> = synchronized(genLock) {
-            // et.255: 无条件拦截露骨性内容/未成年人性化内容；内容限制开关
-            // 不能再决定这条硬红线是否生效（包括 LAN API 调用）。
-            io.github.xororz.localdream.util.PromptSafety.blockReason(prompt)?.let {
+            // et.258: the old unconditional PromptSafety gate is gone. Only
+            // the explicit in-app switch below may filter; default OFF.
+            io.github.xororz.localdream.util.MinorSafety.blockReason(prompt)?.let {
                 throw IOException(it)
             }
             // et.38: honor the same on-device content-restriction toggle as the app UI.

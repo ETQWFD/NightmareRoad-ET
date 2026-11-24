@@ -1,12 +1,12 @@
 {
-  "versionCode": 332,
-  "versionName": "4.0.0-et.257",
-  "title": "Nightmare Road-ET et.257（332）：图片社区收藏人数/下载量/月榜 + 服务端 1.8.0",
-  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v332-et.257/NightmareRoad-ET.apk",
-  "size": 165688320,
-  "sha256": "1d4de352964b25cfe43534b49795045646a2223db3756591058b5f4e0fe41d78",
-  "releaseNotes": "最新版本 et.257（332）\n\n本次更新：\n1) 图片社区新增作品统计：每张作品显示收藏人数、总下载次数、本月下载次数；预览详情和“我的收藏”也能看到。\n2) 新增“图片社区月榜”：按作品下载次数排名，支持“本月榜 / 上月结算”切换；每月 1 日结算上月榜，并把本月计数清零，下个月继续累计。收藏人数只统计登录账号，同一账号去重；游客收藏不计入社区人数。\n3) 收藏按钮会实时显示人数，收藏/取消收藏会同步到社区统计；下载购买成功后自动累加作品总下载与本月下载。\n4) 修复服务端管理端“显示已启动但进程已退出”的假运行状态、模型下载磁盘空间不足和把 HTML 错误页当模型保存的问题（服务端同步 1.8.0）。\n5) 服务端首页对模型名/路径做 HTML 转义，API Key 改为固定时间比较；服务端 1.8.0 同时提供 Windows、Linux、macOS/Max 发行包。\n\n构建校验：basicRelease 编译通过；37 项单元测试 0 失败；单包包含 arm64-v8a / armeabi-v7a / x86_64，ET 证书签名；versionCode 332 / 4.0.0-et.257。升级覆盖安装即可，原有模型、额度、收藏和账号不受影响。",
-  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v332-et.257/NightmareRoad-ET.apk",
+  "versionCode": 333,
+  "versionName": "4.0.0-et.258",
+  "title": "Nightmare Road-ET et.258（333）：关闭自动审核 + 服务端 1.8.1",
+  "apkUrl": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v333-et.258/NightmareRoad-ET.apk",
+  "size": 165686680,
+  "sha256": "d50e4dc278801e47299dc2bb3e9fa752116d111ecef8c8212c99f82dd91bde08",
+  "releaseNotes": "最新版本 et.258（333）\n\n本次更新：\n1) 彻底移除“未开启内容限制却自动审核”：删除 PromptSafety 的全局硬拦截，正常提示词不再被误判为露骨内容。\n2) 模型自带 NSFW 检查（safety_checker.mnn / --safety_checker）默认强制关闭，不再随构建变体自动加载；只有软件内“内容限制”开关打开时才做本地违禁词过滤，默认关闭。\n3) 主界面、后台生成、局域网 API、修图入口统一遵循同一个开关；关闭时直通生成，不做任何额外拦截。\n4) 仅保留未成年人性化内容的法律红线，且用精确词边界匹配，不会再因 cumulus/accumulate 这类子串误伤正常描述。\n5) 诊断报告的下载源探测改为 hf-mirror 优先，避免首行 huggingface 连接失败造成误判。\n6) 服务端同步 1.8.1：内容限制仍默认关闭，只有管理端勾选后才拦截；Windows/Linux/macOS 包同日发布。\n\n构建校验：basicRelease 编译通过；36 项单元测试 0 失败；arm64-v8a / armeabi-v7a / x86_64 单包；ET 证书签名；versionCode 333 / 4.0.0-et.258。覆盖安装即可，模型、账号、收藏不受影响。",
+  "url": "https://github.com/ETQWFD/NightmareRoad-ET/releases/download/v333-et.258/NightmareRoad-ET.apk",
   "force": false,
   "mustUpdate": false
 }

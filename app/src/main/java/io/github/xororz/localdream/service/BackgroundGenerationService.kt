@@ -242,12 +242,24 @@ class BackgroundGenerationService : Service() {
         val steps = data.getIntExtra("steps", 20)
         val cfg = data.getFloatExtra("cfg", 7f)
         val seed = if (data.hasExtra("seed")) data.getLongExtra("seed", 0) else null
-        // et.255: 硬性内容安全闸门。露骨性内容（尤其涉及未成年人）不得进入
-        // 扩散引擎；在扣额度之前拦截，避免用户被扣了额度却只拿到错误。
-        io.github.xororz.localdream.util.PromptSafety.blockReason(prompt)?.let { reason ->
+        // et.258: remove the old unrestricted substring “safety” gate. It
+        // rejected ordinary prompts ("cum" inside "cumulus"/"accumulate").
+        // Only the explicit in-app switch may filter; it is OFF by default.
+        io.github.xororz.localdream.util.MinorSafety.blockReason(prompt)?.let { reason ->
             updateState(GenerationState.Error(reason))
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+                .getBoolean("content_restricted", false)
+        ) {
+            val hit = io.github.xororz.localdream.utils.ContentFilter.containsBlocked(prompt)
+                ?: io.github.xororz.localdream.utils.ContentFilter.containsBlocked(negativePrompt)
+            if (hit != null) {
+                updateState(GenerationState.Error(getString(R.string.content_blocked_warning)))
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
         var width = data.getIntExtra("width", 512)
         var height = data.getIntExtra("height", 512)
@@ -922,7 +934,7 @@ class BackgroundGenerationService : Service() {
                                     // 就顺手回收一次引擎（当前这张已经拿到结果，不影响它），下一张会
                                     // 由界面重新拉起一个干净的进程。可用设置里的开关关闭。
                                     run {
-                                        val sp = getSharedPreferences("app_prefs", MODE_PRIVATE)
+                                        val sp = getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
                                         if (sp.getBoolean("recycle_engine_after_gen", true)) {
                                             val done = sp.getInt("gen_since_recycle", 0) + 1
                                             if (done >= 3) {

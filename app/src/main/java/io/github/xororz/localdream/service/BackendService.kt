@@ -457,32 +457,9 @@ class BackendService : Service() {
             prepareQnnLibrariesBestEffort(runtimeDir)
             prepareDitLibrariesBestEffort(runtimeDir)
 
-            if (BuildConfig.FLAVOR == "filter") {
-                try {
-                    val safetyCheckerTarget = File(filesDir, "safety_checker.mnn")
-                    val assetSize = assets.open("safety_checker.mnn")
-                        .use { it.available().toLong() }
-
-                    if (!safetyCheckerTarget.exists() ||
-                        safetyCheckerTarget.length() != assetSize
-                    ) {
-                        assets.open("safety_checker.mnn").use { input ->
-                            safetyCheckerTarget.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        Log.i(
-                            TAG,
-                            "Safety checker model copied to: ${safetyCheckerTarget.absolutePath}",
-                        )
-                    }
-
-                    safetyCheckerTarget.setReadable(true, true)
-                } catch (e: IOException) {
-                    Log.e(TAG, "copy safety_checker.mnn failed", e)
-                    throw RuntimeException("Failed to copy safety checker model", e)
-                }
-            }
+            // et.258: 不再复制/启用 safety_checker.mnn。filter 变体以前会无条件
+            // 把该模型传给后端，导致用户没开内容限制也被 NSFW 检查；审核只能
+            // 由软件内的内容限制开关决定，默认关闭。
 
             runtimeDir.setReadable(true, true)
             runtimeDir.setExecutable(true, true)
@@ -818,14 +795,9 @@ class BackendService : Service() {
             if (File(modelsDir, "V_PRED").exists()) {
                 command += "--use_v_pred"
             }
-            // The upscaler-mode process takes no safety-checker flag (same as
-            // the standalone upscale screen's own invocation).
-            if (BuildConfig.FLAVOR == "filter" && backendType != BACKEND_TYPE_UPSCALER) {
-                command += listOf(
-                    "--safety_checker",
-                    File(filesDir, "safety_checker.mnn").absolutePath,
-                )
-            }
+            // et.258: 不再向后端传 --safety_checker。模型自带的 NSFW 检查
+            // （safety_checker.mnn）默认强制关闭；软件内内容限制开关只做本地
+            // 违禁词过滤，不依赖模型审核。
             // SDXL and Anima are the large formats that benefit from per-stage
             // load/release. They share the same backend --lowram flag but keep
             // separate UI toggles so each can opt in independently.
